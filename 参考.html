@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="zh">
+
+<head>
+  <meta charset="UTF-8">
+  <title>骰子游戏 - 自定义名称与修正值</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+    }
+
+    input[type=text],
+    input[type=number] {
+      width: 100%;
+      padding: 4px;
+      box-sizing: border-box;
+    }
+
+    table {
+      font-family: '黑体', SimHei, sans-serif;
+      font-size: 12px;
+      border-collapse: collapse;
+      margin-top: 10px;
+      width: 100%;
+      max-width: 500px;
+    }
+
+    th,
+    td {
+      border: 1px solid #ccc;
+      padding: 8px;
+      text-align: left;
+    }
+
+    th {
+      background-color: #f2f2f2;
+    }
+
+    .section {
+      margin-bottom: 30px;
+    }
+
+    label {
+      display: inline-block;
+      width: 100px;
+    }
+
+    #result table {
+      margin-top: 20px;
+      width: 600px;
+    }
+  </style>
+</head>
+
+<body>
+
+  <h2>回合制游戏 - 自定义名称与修正值</h2>
+
+  <div class="section">
+    <label>请输入玩家人数 x:
+      <input type="number" id="players" min="0" value="2">
+    </label>
+    <button onclick="generatePlayers()">生成玩家输入框</button>
+    <button onclick="savePlayers()">保存玩家数据</button>
+    <div id="playerFormContainer"></div>
+  </div>
+
+  <div class="section">
+    <label>请输入敌人数量 y:
+      <input type="number" id="enemies" min="0" value="2">
+    </label>
+    <button onclick="generateEnemies()">生成敌人输入框</button>
+    <button onclick="saveEnemies()">保存敌人数据</button>
+    <div id="enemyFormContainer"></div>
+  </div>
+
+  <button onclick="rollDice()" style="margin-top:10px;">掷骰子</button>
+  <button onclick="copyNames()">复制第二列</button>
+  <button id="applyRankSort" onclick="a()">自定义表格</button>
+  <div id="result"></div>
+
+  <script>
+    // 初始化变量
+    let playerData = null;
+    let enemyData = null;
+    let characters = [];
+    // 页面加载时从 localStorage 读取数据
+    window.onload = function () {
+      const savedPlayer = localStorage.getItem('player');
+      if (savedPlayer) {
+        playerData = JSON.parse(savedPlayer);
+        generatePlayerInputsFromData();
+      }
+
+      const savedEnemy = localStorage.getItem('enemy');
+      if (savedEnemy) {
+        enemyData = JSON.parse(savedEnemy);
+        generateEnemyInputsFromData();
+      }
+    };
+
+    // ========== 玩家部分 ==========
+    function generatePlayers() {
+      const x = parseInt(document.getElementById('players').value);
+      if (isNaN(x) || x < 0) {
+        alert("请输入有效的非负整数！");
+        return;
+      }
+
+      let tableHTML = `
+      <table>
+        <tr>
+          <th>玩家编号</th>
+          <th>名字</th>
+          <th>修正值</th>
+          <th>优劣</th>
+        </tr>
+    `;
+
+      for (let i = 0; i < x; i++) {
+        const name = playerData?.[i]?.name || '';
+        const bonus = playerData?.[i]?.bonus || '';
+        const advantage = playerData?.[i]?.advantage || '';
+        tableHTML += `
+        <tr>
+          <td>玩家 ${i + 1}</td>
+          <td><input type="text" id="playerName${i}" value="${name}" placeholder="名字" required /></td>
+          <td><input type="number" id="playerBonus${i}" value="${bonus}" placeholder="修正值" /></td>
+          <td>
+            <select id="advantagePlayer${i}">
+                        <option value="normal" ${advantage === 'normal' ? 'selected' : ''} >普通</option>
+                        <option value="advantage" ${advantage === 'advantage' ? 'selected' : ''}>优势</option>
+                        <option value="disadvantage" ${advantage === 'disadvantage' ? 'selected' : ''}>劣势</option>
+                    </select> 
+          </td>
+        </tr>
+      `;
+      }
+
+      tableHTML += '</table>';
+      document.getElementById('playerFormContainer').innerHTML = tableHTML;
+    }
+
+    function savePlayers() {
+      const x = parseInt(document.getElementById('players').value);
+      playerData = [];
+
+      for (let i = 0; i < x; i++) {
+        const name = document.getElementById(`playerName${i}`).value.trim();
+        const bonus = parseInt(document.getElementById(`playerBonus${i}`).value) || 0;
+        const advantage = document.getElementById(`advantagePlayer${i}`).value;
+        if (!name) {
+          alert("请填写所有玩家名字");
+          return;
+        }
+
+        playerData.push({ name, bonus, advantage });
+      }
+
+      localStorage.setItem('player', JSON.stringify(playerData));
+      alert("玩家数据已保存到浏览器本地存储");
+      generatePlayerInputsFromData(); // 回显为只读表格
+    }
+
+    function generatePlayerInputsFromData() {
+      if (!playerData || playerData.length === 0) return;
+
+      let tableHTML = `
+      <table>
+        <tr>
+          <th>玩家编号</th>
+          <th>名字</th>
+          <th>修正值</th>
+          <th>优劣</th>
+        </tr>
+    `;
+      playerData.forEach((p, i) => {
+        tableHTML += `
+        <tr>
+          <td>玩家 ${i + 1}</td>
+          <td>${p.name}</td>
+          <td>${p.bonus}</td>
+          <td>${getAdvantageText(p.advantage)}</td>
+        </tr>
+      `;
+      });
+      tableHTML += '</table>';
+      document.getElementById('playerFormContainer').innerHTML = tableHTML;
+    }
+
+    // ========== 敌人部分 ==========
+    function generateEnemies() {
+      const y = parseInt(document.getElementById('enemies').value);
+      if (isNaN(y) || y < 0) {
+        alert("请输入有效的非负整数！");
+        return;
+      }
+
+      let tableHTML = `
+      <table>
+        <tr>
+          <th>敌人编号</th>
+          <th>名字</th>
+          <th>修正值</th>
+          <th>优劣</th>
+        </tr>
+    `;
+
+      for (let i = 0; i < y; i++) {
+        const name = enemyData?.[i]?.name || '';
+        const bonus = enemyData?.[i]?.bonus || '';
+        const advantage = enemyData?.[i]?.advantage || '';
+        tableHTML += `
+        <tr>
+          <td>敌人 ${i + 1}</td>
+          <td><input type="text" id="enemyName${i}" value="${name}" placeholder="名字" required /></td>
+          <td><input type="number" id="enemyBonus${i}" value="${bonus}" placeholder="修正值" /></td>
+          <td>
+            <select id="advantageEnemy${i}">
+                        <option value="normal" ${advantage === 'normal' ? 'selected' : ''} >普通</option>
+                        <option value="advantage" ${advantage === 'advantage' ? 'selected' : ''}>优势</option>
+                        <option value="disadvantage" ${advantage === 'disadvantage' ? 'selected' : ''}>劣势</option>
+                    </select> 
+          </td>
+          
+        </tr>
+      `;
+      }
+
+      tableHTML += '</table>';
+      document.getElementById('enemyFormContainer').innerHTML = tableHTML;
+    }
+
+    function saveEnemies() {
+      const y = parseInt(document.getElementById('enemies').value);
+      enemyData = [];
+
+      for (let i = 0; i < y; i++) {
+        const name = document.getElementById(`enemyName${i}`).value.trim();
+        const bonus = parseInt(document.getElementById(`enemyBonus${i}`).value) || 0;
+        const advantage = document.getElementById(`advantageEnemy${i}`).value;
+        if (!name) {
+          alert("请填写所有敌人名字");
+          return;
+        }
+
+        enemyData.push({ name, bonus, advantage });
+      }
+
+      localStorage.setItem('enemy', JSON.stringify(enemyData));
+      alert("敌人数据已保存到浏览器本地存储");
+      generateEnemyInputsFromData(); // 回显为只读表格
+    }
+
+
+    // 获取优劣骰显示文本
+    function getAdvantageText(advantage) {
+      switch (advantage) {
+        case 'advantage': return '优势 (+5)';
+        case 'disadvantage': return '劣势 (-5)';
+        default: return '普通';
+      }
+    }
+    function getAdvantageNum(advantage) {
+      switch (advantage) {
+        case 'advantage': return 5;
+        case 'disadvantage': return -5;
+        default: return 0;
+      }
+    }
+    function generateEnemyInputsFromData() {
+      if (!enemyData || enemyData.length === 0) return;
+
+      let tableHTML = `
+      <table>
+        <tr>
+          <th>敌人编号</th>
+          <th>名字</th>
+          <th>修正值</th>
+          <th>优劣</th>
+        </tr>
+    `;
+      enemyData.forEach((e, i) => {
+        tableHTML += `
+        <tr>
+          <td>敌人 ${i + 1}</td>
+          <td>${e.name}</td>
+          <td>${e.bonus}</td>
+          <td>${getAdvantageText(e.advantage)}</td>
+        </tr>
+      `;
+      });
+      tableHTML += '</table>';
+      document.getElementById('enemyFormContainer').innerHTML = tableHTML;
+    }
+
+    // ========== 掷骰子逻辑 ==========
+    function rollDice() {
+      if (!playerData && !enemyData) {
+        alert("请至少保存一组角色数据！");
+        return;
+      }
+
+      characters = [];
+
+      if (playerData) {
+        playerData.forEach(p => {
+          const roll = Math.floor(Math.random() * 20) + 1;
+          characters.push({
+            type: '玩家',
+            name: p.name,
+            base: roll,
+            advantageN: getAdvantageNum(p.advantage),
+            advantageT: getAdvantageText(p.advantage),
+            total: roll + p.bonus + getAdvantageNum(p.advantage)
+          });
+        });
+      }
+
+      if (enemyData) {
+        enemyData.forEach(e => {
+          const roll = Math.floor(Math.random() * 20) + 1;
+          characters.push({
+            type: '敌人',
+            name: e.name,
+            base: roll,
+            advantageN: getAdvantageNum(e.advantage),
+            advantageT: getAdvantageText(e.advantage),
+            total: roll + e.bonus + getAdvantageNum(e.advantage)
+          });
+        });
+      }
+
+      // 排序
+      characters.sort((a, b) => b.total - a.total);
+      console.log(characters)
+      // 构建表格
+      let tableHTML = `<table id="myTable"><tr><th>排序</th><th>角色</th><th>名字</th><th>基础点数</th><th>修正值</th><th>优劣</th><th>总点数</th></tr>`;
+      characters.forEach((char, index) => {
+        const rank = index + 1;
+        tableHTML += `<tr data-index="${index}">
+                    <td contenteditable="true" class="rank-cell" style="text-align:center; font-weight:bold;">${rank}</td>
+                      <td>${char.type}</td>
+                      <td style="font-weight: bold;">${char.name}</td>
+                      <td>${char.base}</td>
+                      <td>${char.total - char.base - char.advantageN}</td>
+                      <td>${char.advantageT}</td>
+                      <td>${char.total}</td>
+                    </tr>`;
+      });
+      tableHTML += '</table>';
+
+      document.getElementById('result').innerHTML = tableHTML;
+    }
+
+    function copyNames() {
+      const table = document.getElementById('myTable');
+      const names = [];
+
+      for (let i = 1; i < table.rows.length; i++) {
+        names.push(table.rows[i].cells[2].textContent.trim());
+      }
+
+      const textToCopy = names.join('\n');
+      navigator.clipboard.writeText(textToCopy)
+        .then(() => alert('已复制：\n' + textToCopy))
+        .catch(err => console.error('复制失败:', err));
+    }
+
+
+    // 新增：按用户输入的 rank 重排
+    function a() {
+      console.log(characters)
+      const table = document.getElementById('myTable');
+      if (!table) return;
+
+      const rows = Array.from(table.querySelectorAll('tr')).slice(1); // 跳过表头
+
+      // 提取每行的 rank 和对应的角色名（或其他唯一标识）
+      const rankedItems = rows.map(row => {
+        const rankCell = row.querySelector('.rank-cell');
+        const nameCell = row.querySelectorAll('td')[2]; // 名字在第3列（索引2）
+        const rank = parseInt(rankCell.textContent.trim(), 10);
+        const name = nameCell.textContent.trim();
+
+        console.log(characters)
+        // 找到原始 characters 中匹配的角色
+        const char = characters.find(c => c.name === name);
+        return { rank: isNaN(rank) ? Infinity : rank, char };
+      });
+
+      // 按用户输入的 rank 排序（无效值放最后）
+      rankedItems.sort((a, b) => a.rank - b.rank);
+
+      // 更新 characters 顺序
+      characters = rankedItems.map(item => item.char);
+
+      // 重新渲染表格（这次不再自动按 total 排！）
+      // 注意：如果希望保留“按 total 默认排序”功能，不要在这里 sort
+      let tableHTML = `<table id="myTable">
+    <tr>
+      <th>排序</th><th>角色</th><th>名字</th><th>基础点数</th><th>修正值</th><th>优劣</th><th>总点数</th>
+    </tr>`;
+
+      characters.forEach((char, index) => {
+        const rank = index + 1; // 也可以保留用户输入的 rank，但通常重排后应连续
+        // 这里我们选择：**重排后显示连续排名（1,2,3...）**，而不是保留用户可能重复/跳号的输入
+        tableHTML += `
+      <tr>
+        <td contenteditable="true" class="rank-cell" style="text-align:center; font-weight:bold;">${rank}</td>
+        <td>${char.type}</td>
+        <td style="font-weight: bold;">${char.name}</td>
+        <td>${char.base}</td>
+        <td>${char.total - char.base - char.advantageN}</td>
+        <td>${char.advantageT}</td>
+        <td>${char.total}</td>
+      </tr>`;
+      });
+      tableHTML += '</table>';
+      document.getElementById('result').innerHTML = tableHTML;
+
+      // 重新绑定事件（如果需要支持再次编辑+应用，可选）
+      // 本例中每次点击都全量重渲染，所以无需额外绑定
+    };
+
+  </script>
+
+</body>
+
+</html>

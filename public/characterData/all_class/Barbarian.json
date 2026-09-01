@@ -1,0 +1,251 @@
+{
+  "name": "野蛮人",
+  "coreTraits": {
+    "primaryAbility": "力量",
+    "hitDie": "d12",
+    "savingThrows": {
+      "strength": true,
+      "constitution": true
+    },
+    "skills": {
+      "choose": 2,
+      "options": [
+        "驯兽",
+        "运动",
+        "威吓",
+        "自然",
+        "察觉",
+        "求生"
+      ]
+    },
+    "weapons": {
+      "simple": true,
+      "martial": true,
+      "exotic": false
+    },
+    "armor": {
+      "light": true,
+      "medium": true,
+      "shields": true
+    },
+    "startingEquipment": {
+      "optionA": [
+        "巨斧",
+        "4把手斧",
+        "探索套组",
+        "15GP"
+      ],
+      "optionB": [
+        "75GP"
+      ]
+    }
+  },
+  "features": [
+    {
+      "level": 1,
+      "proficiencyBonus": "+2",
+      "featureNames": [
+        "狂暴",
+        "无甲防御",
+        "武器精通"
+      ],
+      "ragePerDay": 2,
+      "rageDamageBonus": 2,
+      "weaponAttackBonus": 2
+    },
+    {
+      "level": 2,
+      "proficiencyBonus": "+2",
+      "featureNames": [
+        "危机感应",
+        "鲁莽攻击"
+      ],
+      "ragePerDay": 2,
+      "rageDamageBonus": 2,
+      "weaponAttackBonus": 2
+    },
+    {
+      "level": 3,
+      "proficiencyBonus": "+2",
+      "featureNames": [
+        "野蛮人子职",
+        "原初学识"
+      ],
+      "ragePerDay": 3,
+      "rageDamageBonus": 2,
+      "weaponAttackBonus": 2
+    },
+    {
+      "level": 4,
+      "proficiencyBonus": "+2",
+      "featureNames": [
+        "属性值提升"
+      ],
+      "ragePerDay": 3,
+      "rageDamageBonus": 2,
+      "weaponAttackBonus": 3
+    },
+    {
+      "level": 5,
+      "proficiencyBonus": "+3",
+      "featureNames": [
+        "额外攻击",
+        "快速移动"
+      ],
+      "ragePerDay": 3,
+      "rageDamageBonus": 2,
+      "weaponAttackBonus": 3
+    },
+    {
+      "level": 6,
+      "proficiencyBonus": "+3",
+      "featureNames": [
+        "子职特性"
+      ],
+      "ragePerDay": 4,
+      "rageDamageBonus": 2,
+      "weaponAttackBonus": 3
+    },
+    {
+      "level": 7,
+      "proficiencyBonus": "+3",
+      "featureNames": [
+        "野性直觉",
+        "莽驰"
+      ],
+      "ragePerDay": 4,
+      "rageDamageBonus": 2,
+      "weaponAttackBonus": 3
+    },
+    {
+      "level": 8,
+      "proficiencyBonus": "+3",
+      "featureNames": [
+        "属性值提升"
+      ],
+      "ragePerDay": 4,
+      "rageDamageBonus": 2,
+      "weaponAttackBonus": 3
+    },
+    {
+      "level": 9,
+      "proficiencyBonus": "+4",
+      "featureNames": [
+        "凶蛮打击"
+      ],
+      "ragePerDay": 4,
+      "rageDamageBonus": 3,
+      "weaponAttackBonus": 3
+    },
+    {
+      "level": 10,
+      "proficiencyBonus": "+4",
+      "featureNames": [
+        "子职特性"
+      ],
+      "ragePerDay": 4,
+      "rageDamageBonus": 3,
+      "weaponAttackBonus": 4
+    },
+    {
+      "level": 11,
+      "proficiencyBonus": "+4",
+      "featureNames": [
+        "坚韧狂暴"
+      ],
+      "ragePerDay": 4,
+      "rageDamageBonus": 3,
+      "weaponAttackBonus": 4
+    },
+    {
+      "level": 12,
+      "proficiencyBonus": "+4",
+      "featureNames": [
+        "属性值提升"
+      ],
+      "ragePerDay": 5,
+      "rageDamageBonus": 3,
+      "weaponAttackBonus": 4
+    },
+    {
+      "level": 13,
+      "proficiencyBonus": "+5",
+      "featureNames": [
+        "强化凶蛮打击"
+      ],
+      "ragePerDay": 5,
+      "rageDamageBonus": 3,
+      "weaponAttackBonus": 4
+    },
+    {
+      "level": 14,
+      "proficiencyBonus": "+5",
+      "featureNames": [
+        "子职特性"
+      ],
+      "ragePerDay": 5,
+      "rageDamageBonus": 3,
+      "weaponAttackBonus": 4
+    },
+    {
+      "level": 15,
+      "proficiencyBonus": "+5",
+      "featureNames": [
+        "持久狂暴"
+      ],
+      "ragePerDay": 5,
+      "rageDamageBonus": 3,
+      "weaponAttackBonus": 4
+    },
+    {
+      "level": 16,
+      "proficiencyBonus": "+5",
+      "featureNames": [
+        "属性值提升"
+      ],
+      "ragePerDay": 5,
+      "rageDamageBonus": 4,
+      "weaponAttackBonus": 4
+    },
+    {
+      "level": 17,
+      "proficiencyBonus": "+6",
+      "featureNames": [
+        "强化凶蛮打击"
+      ],
+      "ragePerDay": 6,
+      "rageDamageBonus": 4,
+      "weaponAttackBonus": 4
+    },
+    {
+      "level": 18,
+      "proficiencyBonus": "+6",
+      "featureNames": [
+        "不屈勇武"
+      ],
+      "ragePerDay": 6,
+      "rageDamageBonus": 4,
+      "weaponAttackBonus": 4
+    },
+    {
+      "level": 19,
+      "proficiencyBonus": "+6",
+      "featureNames": [
+        "传奇恩惠"
+      ],
+      "ragePerDay": 6,
+      "rageDamageBonus": 4,
+      "weaponAttackBonus": 4
+    },
+    {
+      "level": 20,
+      "proficiencyBonus": "+6",
+      "featureNames": [
+        "原初斗士"
+      ],
+      "ragePerDay": 6,
+      "rageDamageBonus": 4,
+      "weaponAttackBonus": 4
+    }
+  ]
+}

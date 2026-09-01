@@ -1,0 +1,248 @@
+{
+  "name": "战士",
+  "coreTraits": {
+    "primaryAbility": "力量或敏捷",
+    "hitDie": "d10",
+    "savingThrows": {
+      "strength": true,
+      "constitution": true
+    },
+    "skills": {
+      "choose": 2,
+      "options": [
+        "特技",
+        "驯兽",
+        "运动",
+        "历史",
+        "洞悉",
+        "威吓",
+        "游说",
+        "察觉",
+        "求生"
+      ]
+    },
+    "weapons": {
+      "simple": true,
+      "martial": true,
+      "exotic": false
+    },
+    "armor": {
+      "light": true,
+      "medium": true,
+      "heavy": true,
+      "shields": true
+    },
+    "startingEquipment": {
+      "optionA": [
+        "链甲",
+        "巨剑",
+        "链枷",
+        "8杆标枪",
+        "地城套组",
+        "4GP"
+      ],
+      "optionB": [
+        "镶钉皮甲",
+        "弯刀",
+        "短剑",
+        "长弓",
+        "20支箭矢",
+        "箭袋",
+        "地城套组",
+        "11GP"
+      ],
+      "optionC": [
+        "155GP"
+      ]
+    }
+  },
+  "features": [
+    {
+      "level": 1,
+      "proficiencyBonus": "+2",
+      "featureNames": [
+        "战斗风格",
+        "回气",
+        "武器精通"
+      ],
+      "actionSurge": 2,
+      "weaponAttackBonus": 3
+    },
+    {
+      "level": 2,
+      "proficiencyBonus": "+2",
+      "featureNames": [
+        "动作如潮（一次）",
+        "战术思维"
+      ],
+      "actionSurge": 2,
+      "weaponAttackBonus": 3
+    },
+    {
+      "level": 3,
+      "proficiencyBonus": "+2",
+      "featureNames": [
+        "战士子职"
+      ],
+      "actionSurge": 2,
+      "weaponAttackBonus": 3
+    },
+    {
+      "level": 4,
+      "proficiencyBonus": "+2",
+      "featureNames": [
+        "属性值提升"
+      ],
+      "actionSurge": 3,
+      "weaponAttackBonus": 4
+    },
+    {
+      "level": 5,
+      "proficiencyBonus": "+3",
+      "featureNames": [
+        "额外攻击",
+        "战术转进"
+      ],
+      "actionSurge": 3,
+      "weaponAttackBonus": 4
+    },
+    {
+      "level": 6,
+      "proficiencyBonus": "+3",
+      "featureNames": [
+        "属性值提升"
+      ],
+      "actionSurge": 3,
+      "weaponAttackBonus": 4
+    },
+    {
+      "level": 7,
+      "proficiencyBonus": "+3",
+      "featureNames": [
+        "子职特性"
+      ],
+      "actionSurge": 3,
+      "weaponAttackBonus": 4
+    },
+    {
+      "level": 8,
+      "proficiencyBonus": "+3",
+      "featureNames": [
+        "属性值提升"
+      ],
+      "actionSurge": 3,
+      "weaponAttackBonus": 4
+    },
+    {
+      "level": 9,
+      "proficiencyBonus": "+4",
+      "featureNames": [
+        "不屈（一次）",
+        "战术主宰"
+      ],
+      "actionSurge": 3,
+      "weaponAttackBonus": 4
+    },
+    {
+      "level": 10,
+      "proficiencyBonus": "+4",
+      "featureNames": [
+        "子职特性"
+      ],
+      "actionSurge": 4,
+      "weaponAttackBonus": 5
+    },
+    {
+      "level": 11,
+      "proficiencyBonus": "+4",
+      "featureNames": [
+        "额外攻击（二）"
+      ],
+      "actionSurge": 4,
+      "weaponAttackBonus": 5
+    },
+    {
+      "level": 12,
+      "proficiencyBonus": "+4",
+      "featureNames": [
+        "属性值提升"
+      ],
+      "actionSurge": 4,
+      "weaponAttackBonus": 5
+    },
+    {
+      "level": 13,
+      "proficiencyBonus": "+5",
+      "featureNames": [
+        "不屈（两次）",
+        "究明攻击"
+      ],
+      "actionSurge": 4,
+      "weaponAttackBonus": 5
+    },
+    {
+      "level": 14,
+      "proficiencyBonus": "+5",
+      "featureNames": [
+        "属性值提升"
+      ],
+      "actionSurge": 4,
+      "weaponAttackBonus": 5
+    },
+    {
+      "level": 15,
+      "proficiencyBonus": "+5",
+      "featureNames": [
+        "子职特性"
+      ],
+      "actionSurge": 4,
+      "weaponAttackBonus": 5
+    },
+    {
+      "level": 16,
+      "proficiencyBonus": "+5",
+      "featureNames": [
+        "属性值提升"
+      ],
+      "actionSurge": 4,
+      "weaponAttackBonus": 6
+    },
+    {
+      "level": 17,
+      "proficiencyBonus": "+6",
+      "featureNames": [
+        "动作如潮（两次）",
+        "不屈（三次）"
+      ],
+      "actionSurge": 4,
+      "weaponAttackBonus": 6
+    },
+    {
+      "level": 18,
+      "proficiencyBonus": "+6",
+      "featureNames": [
+        "子职特性"
+      ],
+      "actionSurge": 4,
+      "weaponAttackBonus": 6
+    },
+    {
+      "level": 19,
+      "proficiencyBonus": "+6",
+      "featureNames": [
+        "传奇恩惠"
+      ],
+      "actionSurge": 4,
+      "weaponAttackBonus": 6
+    },
+    {
+      "level": 20,
+      "proficiencyBonus": "+6",
+      "featureNames": [
+        "额外攻击（三）"
+      ],
+      "actionSurge": 4,
+      "weaponAttackBonus": 6
+    }
+  ]
+}
