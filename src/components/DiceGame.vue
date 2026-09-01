@@ -4,7 +4,22 @@
     <p class="hint">
       分别配置玩家与敌人 → 保存数据 → 点击「掷骰子」按总点数自动排序；
       可以直接点表格里的排序数字修改名次，再点「自定义表格」应用手动顺序。
+      可选择一个「团」一键载入成员为玩家；角色资源请在「角色卡 → 战斗 / 资源」标签中修改。
     </p>
+
+    <!-- ========== 团（冒险小队） ========== -->
+    <div v-if="parties.length" class="section">
+      <div class="section-head">
+        <h3>👥 团</h3>
+        <div class="inline-controls">
+          <el-select v-model="selectedPartyId" size="small" placeholder="选择团…" style="width: 240px" @change="onPartyChange">
+            <el-option value="" label="—— 手动配置（不使用团）——" />
+            <el-option v-for="p in parties" :key="p.id" :value="p.id" :label="`${p.name || '未命名团'}（${p.memberIds.length} 人）`" />
+          </el-select>
+          <el-button size="small" type="primary" plain @click="applyPartyToPlayers">载入团成员为玩家</el-button>
+        </div>
+      </div>
+    </div>
 
     <!-- ========== 玩家部分 ========== -->
     <div class="section">
@@ -202,6 +217,12 @@ import {
   getBackendBase,
   setBackendBase,
 } from '../api/characterBackend'
+import type { CharacterCard } from '../data/dndModel'
+import { normalizeCharacterCard, getInitiativeTotal } from '../data/dndModel'
+import type { Party } from '../data/partyModel'
+import { loadParties } from '../data/partyModel'
+
+const CARDS_KEY = 'dnd-character-cards'
 
 interface Combatant {
   name: string
@@ -246,6 +267,60 @@ const showEnemyForm = ref(false)
 
 const characters = ref<RollResult[]>([])
 let idCounter = 0
+
+// ========== 团（冒险小队）与角色资源同步 ==========
+const parties = ref<Party[]>([])
+const cardLibrary = ref<CharacterCard[]>([])
+const selectedPartyId = ref('')
+
+function loadCardLibrary() {
+  try {
+    const saved = localStorage.getItem(CARDS_KEY)
+    if (saved) {
+      const parsed = JSON.parse(saved)
+      cardLibrary.value = Array.isArray(parsed)
+        ? parsed.map(normalizeCharacterCard).filter((c): c is CharacterCard => c !== null)
+        : []
+    }
+  } catch (e) {
+    console.error('读取角色卡库失败', e)
+    cardLibrary.value = []
+  }
+}
+
+function cardById(id: string): CharacterCard | null {
+  return cardLibrary.value.find((c) => c.id === id) || null
+}
+
+// 从团载入成员为「玩家」
+function applyPartyToPlayers() {
+  const party = parties.value.find((p) => p.id === selectedPartyId.value)
+  if (!party) return
+  const members = party.memberIds
+    .map((id) => cardById(id))
+    .filter((c): c is CharacterCard => c !== null)
+  if (!members.length) {
+    ElMessage.info('该团暂无成员')
+    return
+  }
+  playerData.value = members.map((c) => ({
+    name: c.name || '未命名角色',
+    bonus: getInitiativeTotal(c),
+    advantage: c.initiativeAdvantage || 'normal',
+  }))
+  showPlayerForm.value = false
+  savePlayersToStorage()
+  ElMessage.success(`已从「${party.name || '未命名团'}」载入 ${members.length} 名玩家`)
+}
+
+function onPartyChange() {
+  if (!selectedPartyId.value) return // 手动配置，保留当前玩家
+  applyPartyToPlayers()
+}
+
+function savePlayersToStorage() {
+  localStorage.setItem('player', JSON.stringify(playerData.value))
+}
 
 function advantageNum(a: string): number {
   return ADVANTAGE_NUM[a] ?? 0
@@ -512,6 +587,14 @@ onMounted(async () => {
 
   // 静默检查后端并拉取共享结果（让所有查看者看到最新发布）
   await silentBackendInit()
+
+  // 载入团，默认自动加入第一个团的成员为玩家
+  parties.value = loadParties()
+  loadCardLibrary()
+  if (parties.value.length) {
+    selectedPartyId.value = parties.value[0].id
+    applyPartyToPlayers()
+  }
 })
 
 // 自动保存状态（人数、表单显示、投掷结果）

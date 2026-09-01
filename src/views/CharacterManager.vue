@@ -313,7 +313,7 @@
                   <div class="cm-def-title">护甲</div>
                   <div class="cm-def-row">
                     <span class="cm-def-label">类型</span>
-                    <el-select v-model="currentCard.armor.kind" style="width: 130px">
+                    <el-select v-model="currentCard.armor.kind" style="width: 130px" @change="onArmorKindChange">
                       <el-option v-for="k in ARMOR_KINDS" :key="k" :value="k" :label="ARMOR_KIND_LABELS[k]" />
                     </el-select>
                   </div>
@@ -527,6 +527,7 @@ import {
   hasStealthDisadvantage,
   ARMOR_KINDS,
   ARMOR_KIND_LABELS,
+  ARMOR_DEFAULT_AC,
   WEAPON_PRESETS,
   getWeaponHitBonus,
   getWeaponDamageText,
@@ -708,6 +709,13 @@ function recalcPassive() {
   const c = currentCard.value
   if (!c) return
   c.passivePerception = 10 + getSkillTotal(c, '察觉')
+}
+
+// 护甲类型切换时填入该类护甲的基础 AC
+function onArmorKindChange() {
+  const c = currentCard.value
+  if (!c) return
+  c.armor.ac = ARMOR_DEFAULT_AC[c.armor.kind]
 }
 
 // ========== 装备 / 武器 / 防具 / 法术 增删 ==========

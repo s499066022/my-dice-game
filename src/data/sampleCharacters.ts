@@ -88,7 +88,7 @@ function buildBarbarian11(): CharacterCard {
   c.hp = { current: 87, max: 115 }
   c.tempHp = 0
   c.hitDice = { current: 11, max: 11, formula: '1d12' }
-  c.acBonus = 15 // 无甲防御 10 + 敏捷2 + 体质3
+  c.acBonus = 5 // 额外加值：敏捷2 + 体质3（基础 10 在 armor.ac）
   c.armor = armor({ kind: 'none' })
   c.shield = shield({})
   c.initiativeBonus = 0
@@ -119,7 +119,7 @@ function buildBarbarian11(): CharacterCard {
       traits: '投掷(射程30/120)', ammo: 0, cost: '5sp', attuned: false, description: '', slot: '手部',
     },
   ]
-  c.armor = armor({ kind: 'none', name: '无甲（无甲防御）', note: 'AC = 10 + 敏捷 + 体质' })
+  c.armor = armor({ kind: 'none', ac: 10, name: '无甲（无甲防御）', note: 'AC = 10(基础) + 敏捷 + 体质' })
   c.shield = shield({})
   c.equipment = [
     { id: uid(), name: '冒险者背包', attuned: false, description: '', slot: '背部' },
@@ -202,7 +202,7 @@ function buildWizard11(): CharacterCard {
   c.hp = { current: 54, max: 68 }
   c.tempHp = 0
   c.hitDice = { current: 11, max: 11, formula: '1d6' }
-  c.acBonus = 15 // 法师护甲 13 + 敏捷2
+  c.acBonus = 2 // 敏捷调整（法师护甲 13 在 armor.ac）
   c.armor = armor({ kind: 'none' })
   c.shield = shield({})
   c.initiativeBonus = 0
@@ -222,7 +222,7 @@ function buildWizard11(): CharacterCard {
       traits: '灵巧 轻型 投掷(射程20/60)', ammo: 0, cost: '2gp', attuned: false, description: '', slot: '手部',
     },
   ]
-  c.armor = armor({ kind: 'none', name: '无甲（法师护甲）', note: 'AC = 13 + 敏捷调整值' })
+  c.armor = armor({ kind: 'none', ac: 13, name: '无甲（法师护甲）', note: 'AC = 13 + 敏捷调整值' })
   c.shield = shield({})
   c.equipment = [
     { id: uid(), name: '法术书', attuned: false, description: '记录全部已知法术。', slot: '手部' },

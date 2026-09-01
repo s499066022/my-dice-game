@@ -12,7 +12,7 @@ export default defineConfig({
       '@': resolve(__dirname, 'src')
     }
   },
-  base: './',
+  base: '/',
   server: {
     // 开发时把 /api 转发到本机 Laravel 后端（若后端未启动，前端会自动降级为本地存储）
     proxy: {

@@ -78,6 +78,14 @@ export const ARMOR_KIND_LABELS: Record<ArmorKind, string> = {
   heavy: '重甲',
 }
 
+// 各类型护甲的基础 AC（敏捷等额外加值放到 acBonus）
+export const ARMOR_DEFAULT_AC: Record<ArmorKind, number> = {
+  none: 10,
+  light: 11,
+  medium: 13,
+  heavy: 15,
+}
+
 export interface ArmorDef {
   kind: ArmorKind
   name: string
@@ -403,8 +411,9 @@ export function getInitiativeTotal(card: CharacterCard): number {
 }
 
 // ========== 防具 / AC ==========
+// 无甲（未装备护甲）也保留一个基础 AC，因此始终计入护甲的 AC 值。
 export function getArmorAC(card: CharacterCard): number {
-  return card.armor?.kind !== 'none' ? (card.armor?.ac || 0) : 0
+  return card.armor?.ac || 0
 }
 
 export function getShieldAC(card: CharacterCard): number {
@@ -468,8 +477,8 @@ export function createEmptyCard(name = ''): CharacterCard {
     hp: { current: 10, max: 10 },
     tempHp: 0,
     hitDice: { current: 1, max: 1, formula: '1d8' },
-    acBonus: 10,
-    armor: { kind: 'none', name: '', note: '', ac: 0, stealthDisadvantage: false, attuned: false, description: '', slot: '胸部' },
+    acBonus: 0,
+    armor: { kind: 'none', name: '', note: '', ac: 10, stealthDisadvantage: false, attuned: false, description: '', slot: '胸部' },
     shield: { equipped: false, name: '', note: '', ac: 0, stealthDisadvantage: false, attuned: false, description: '', slot: '手部' },
     initiativeBonus: 0,
     initiativeAdvantage: 'normal',

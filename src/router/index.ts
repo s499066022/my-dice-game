@@ -1,9 +1,8 @@
 // src/router/index.ts
 import { createRouter, createWebHistory, RouteRecordRaw } from 'vue-router'
 import DiceView from '../views/diceView.vue'
-import Combattools from '../views/combattools.vue'
-import CharacterCreator from '../views/CharacterCreator/CharacterCreator.vue'
 import CharacterManager from '../views/CharacterManager.vue'
+import PartyManager from '../views/PartyManager.vue'
 
 const routes: Array<RouteRecordRaw> = [
   {
@@ -17,17 +16,10 @@ const routes: Array<RouteRecordRaw> = [
     component: CharacterManager
   },
   {
-    path: '/characters',
-    name: 'Characters',
-    component: CharacterCreator
+    path: '/party',
+    name: 'Party',
+    component: PartyManager
   },
-
-  {
-    path: '/combattools',
-    name: 'Combattools',
-    component: Combattools
-  },
-
   {
     path: '/',
     redirect: '/dice'

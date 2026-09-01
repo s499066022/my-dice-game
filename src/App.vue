@@ -4,9 +4,8 @@
       <span class="app-logo">🎲 DnD 工具箱</span>
       <div class="app-links">
         <router-link to="/dice">🎲 先攻骰</router-link>
-        <router-link to="/cards">🗂️ 角色卡资源</router-link>
-        <router-link to="/characters">🧾 角色卡创建器（搁置）</router-link>
-        <router-link to="/combattools">⚔️ 战斗记录</router-link>
+        <router-link to="/cards">🗂️ 角色卡</router-link>
+        <router-link to="/party">👥 团</router-link>
       </div>
       <a class="external" href="https://5echm.kagangtuya.top/" target="_blank">
         5E 不全书 ↗
