@@ -96,6 +96,7 @@ import {
   deleteParty,
   findPartyByMember,
 } from '../data/partyModel'
+import { backendPing, backendFetchParties, backendPublishParties } from '../api/characterBackend'
 
 const CARDS_KEY = 'dnd-character-cards'
 
@@ -136,6 +137,8 @@ function loadCards() {
 
 function persist() {
   saveParties(parties.value)
+  // 同步到后端（若在线；离线则仅本地）
+  backendPublishParties(JSON.parse(JSON.stringify(parties.value)))
 }
 
 function addParty() {
@@ -183,6 +186,21 @@ function onMountedInit() {
   loadCards()
   parties.value = loadParties()
   currentPartyId.value = parties.value[0]?.id ?? ''
+  syncFromBackend()
+}
+
+// 拉取后端团数据（若在线且后端有数据则替换本地，否则推送本地上去）
+async function syncFromBackend() {
+  const online = await backendPing()
+  if (!online) return
+  const remote = await backendFetchParties()
+  if (remote && remote.length) {
+    parties.value = remote
+    currentPartyId.value = parties.value[0]?.id ?? ''
+    saveParties(parties.value)
+  } else if (parties.value.length) {
+    backendPublishParties(JSON.parse(JSON.stringify(parties.value)))
+  }
 }
 
 onMounted(onMountedInit)

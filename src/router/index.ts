@@ -3,6 +3,7 @@ import { createRouter, createWebHistory, RouteRecordRaw } from 'vue-router'
 import DiceView from '../views/diceView.vue'
 import CharacterManager from '../views/CharacterManager.vue'
 import PartyManager from '../views/PartyManager.vue'
+import HexMap from '../views/HexMap.vue'
 
 const routes: Array<RouteRecordRaw> = [
   {
@@ -19,6 +20,11 @@ const routes: Array<RouteRecordRaw> = [
     path: '/party',
     name: 'Party',
     component: PartyManager
+  },
+  {
+    path: '/map',
+    name: 'HexMap',
+    component: HexMap
   },
   {
     path: '/',

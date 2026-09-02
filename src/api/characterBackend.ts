@@ -119,6 +119,83 @@ export async function backendPublishInitiative(results: any[]): Promise<boolean>
   }
 }
 
+// ========== 地图（战场）共享 ==========
+function mapUrl(path = ''): string {
+  const base = (getBackendBase() || DEFAULT_BASE).replace(/\/+$/, '')
+  return `${base}/map${path ? `/${path}` : ''}`
+}
+
+export async function backendFetchMap(): Promise<{ tokens: any[]; indicators: any[]; npcs: any[]; updatedAt: string } | null> {
+  try {
+    const res = await fetch(mapUrl(), { headers: { Accept: 'application/json' } })
+    if (!res.ok) throw new Error('HTTP ' + res.status)
+    const data = await res.json()
+    if (data && data.ok === true && data.data) {
+      return {
+        tokens: data.data.tokens || [],
+        indicators: data.data.indicators || [],
+        npcs: data.data.npcs || [],
+        updatedAt: data.data.updatedAt || '',
+      }
+    }
+    return null
+  } catch (e) {
+    console.error('读取后端地图失败', e)
+    return null
+  }
+}
+
+export async function backendPublishMap(tokens: any[], indicators: any[] = [], npcs: any[] = []): Promise<boolean> {
+  try {
+    const res = await fetch(mapUrl(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: { tokens, indicators, npcs } }),
+    })
+    if (!res.ok) return false
+    const data = await res.json()
+    return !!(data && data.ok)
+  } catch (e) {
+    console.error('写入后端地图失败', e)
+    return false
+  }
+}
+
+// ========== 团（Party）同步 ==========
+function partiesUrl(path = ''): string {
+  const base = (getBackendBase() || DEFAULT_BASE).replace(/\/+$/, '')
+  return `${base}/parties${path ? `/${path}` : ''}`
+}
+
+export async function backendFetchParties(): Promise<any[] | null> {
+  try {
+    const res = await fetch(partiesUrl(), { headers: { Accept: 'application/json' } })
+    if (!res.ok) throw new Error('HTTP ' + res.status)
+    const data = await res.json()
+    if (data && data.ok === true && Array.isArray(data.data)) return data.data
+    return null
+  } catch (e) {
+    console.error('读取后端团失败', e)
+    return null
+  }
+}
+
+export async function backendPublishParties(parties: any[]): Promise<boolean> {
+  try {
+    const res = await fetch(partiesUrl('sync'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: parties }),
+    })
+    if (!res.ok) return false
+    const data = await res.json()
+    return !!(data && data.ok)
+  } catch (e) {
+    console.error('写入后端团失败', e)
+    return false
+  }
+}
+
 // 响应式的后端连接状态（供页面展示）
 export interface BackendStatusState {
   status: BackendStatus

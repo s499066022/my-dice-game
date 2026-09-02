@@ -6,6 +6,7 @@
         <router-link to="/dice">🎲 先攻骰</router-link>
         <router-link to="/cards">🗂️ 角色卡</router-link>
         <router-link to="/party">👥 团</router-link>
+        <router-link to="/map">🗺️ 地图</router-link>
       </div>
       <a class="external" href="https://5echm.kagangtuya.top/" target="_blank">
         5E 不全书 ↗

@@ -21,6 +21,21 @@
       </div>
     </div>
 
+    <!-- ========== NPC / 怪物（地图） ========== -->
+    <div class="section">
+      <div class="section-head">
+        <h3>👹 NPC / 怪物（地图）</h3>
+        <div class="inline-controls">
+          <el-select v-model="npcSide" size="small" style="width: 110px">
+            <el-option value="player" label="玩家侧" />
+            <el-option value="enemy" label="敌人侧" />
+          </el-select>
+          <el-button size="small" type="primary" plain @click="importMapNpcs">导入地图NPC</el-button>
+          <span class="npc-hint">共 {{ mapNpcs.length }} 个 · 默认{{ npcSide === 'player' ? '玩家' : '敌人' }}侧，其余信息由您填写</span>
+        </div>
+      </div>
+    </div>
+
     <!-- ========== 玩家部分 ========== -->
     <div class="section">
       <div class="section-head">
@@ -322,6 +337,44 @@ function savePlayersToStorage() {
   localStorage.setItem('player', JSON.stringify(playerData.value))
 }
 
+// ========== 地图 NPC / 怪物导入 ==========
+const mapNpcs = ref<{ name: string; type: string }[]>([])
+const npcSide = ref<'player' | 'enemy'>('player')
+
+function loadMapNpcs() {
+  try {
+    const s = localStorage.getItem('dnd-map-npcs')
+    if (s) {
+      const d = JSON.parse(s)
+      if (Array.isArray(d)) {
+        mapNpcs.value = d.filter((x: any) => x && x.name).map((x: any) => ({ name: x.name, type: x.type || 'NPC' }))
+      }
+    }
+  } catch (e) {
+    console.error('读取地图NPC失败', e)
+  }
+}
+
+function importMapNpcs() {
+  if (!mapNpcs.value.length) {
+    ElMessage.info('地图暂无 NPC/怪物')
+    return
+  }
+  const target = npcSide.value === 'player' ? playerData : enemyData
+  let added = 0
+  mapNpcs.value.forEach((n) => {
+    if (!target.value.some((x) => x.name === n.name)) {
+      target.value.push({ name: n.name, bonus: 0, advantage: 'normal' })
+      added++
+    }
+  })
+  if (npcSide.value === 'player') savePlayersToStorage()
+  else localStorage.setItem('enemy', JSON.stringify(enemyData.value))
+  showPlayerForm.value = false
+  showEnemyForm.value = false
+  ElMessage.success(`已从地图导入 ${added} 个NPC到${npcSide.value === 'player' ? '玩家' : '敌人'}侧`)
+}
+
 function advantageNum(a: string): number {
   return ADVANTAGE_NUM[a] ?? 0
 }
@@ -591,6 +644,7 @@ onMounted(async () => {
   // 载入团，默认自动加入第一个团的成员为玩家
   parties.value = loadParties()
   loadCardLibrary()
+  loadMapNpcs()
   if (parties.value.length) {
     selectedPartyId.value = parties.value[0].id
     applyPartyToPlayers()
@@ -724,6 +778,10 @@ h2 {
 
 .section {
   margin-bottom: 24px;
+}
+.npc-hint {
+  color: #9ca3af;
+  font-size: 12px;
 }
 
 .section-head {
