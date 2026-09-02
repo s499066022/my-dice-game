@@ -6,6 +6,9 @@
       右上角工具可切「拖图 / 拖拽人物 / 测量 / 锥形」并管理已放置人物（改名/改大小/删除）。
     </p>
 
+    <!-- 战斗会话（长连接） -->
+    <CombatSessionPanel />
+
     <!-- 后端同步 -->
     <div class="backend-bar">
       <el-tag :type="mapTagType" size="small">{{ mapStatusText }}</el-tag>
@@ -33,8 +36,8 @@
         @touchend="onTouchEnd"
       ></canvas>
 
-      <!-- 左上角：角色来源 -->
-      <div class="library-panel">
+      <!-- 左上角：角色来源（暂屏蔽，改用战斗会话面板添加） -->
+      <div v-if="showLibrary" class="library-panel">
         <div class="lp-tabs">
           <button :class="{ on: libTab === 'party' }" @click="libTab = 'party'">👥 团</button>
           <button :class="{ on: libTab === 'npc' }" @click="libTab = 'npc'">👹 NPC/怪物</button>
@@ -64,7 +67,7 @@
 
         <div v-else-if="libTab === 'npc'" class="lp-block">
           <div class="lp-create">
-            <input type="text" v-model="npcName" placeholder="NPC/怪物名" class="lp-input" />
+            <input type="text" v-model="npcName" placeholder="名称" class="lp-input" />
             <el-select v-model="npcType" size="small" style="width: 82px">
               <el-option value="NPC" label="NPC" /><el-option value="怪物" label="怪物" />
             </el-select>
@@ -139,14 +142,41 @@
           <div v-else-if="tool === 'cone'" class="tp-fields">
             <span class="tp-tip">锥形(尺)</span>
             <el-input-number v-model="coneFt" :min="5" :max="120" :step="5" size="small" style="width: 90px" />
+            <el-select v-model="spellBind" size="small" style="width: 104px" placeholder="绑定参战者">
+              <el-option value="" label="不绑定" />
+              <el-option v-for="t in session.combatants" :key="t.id" :value="t.id" :label="t.name || '角色'" />
+            </el-select>
             <span class="tp-tip">点起点→点方向</span>
             <button class="tp-btn" @click="clearCone">清除</button>
           </div>
           <div v-else-if="tool === 'circle'" class="tp-fields">
             <span class="tp-tip">半径(尺)</span>
             <el-input-number v-model="circleFt" :min="5" :max="120" :step="5" size="small" style="width: 90px" />
+            <el-select v-model="spellBind" size="small" style="width: 104px" placeholder="绑定参战者">
+              <el-option value="" label="不绑定" />
+              <el-option v-for="t in session.combatants" :key="t.id" :value="t.id" :label="t.name || '角色'" />
+            </el-select>
             <span class="tp-tip">点中心放置</span>
             <button class="tp-btn" @click="clearCircle">清除</button>
+          </div>
+
+          <!-- 会话参战者（可拖拽） -->
+          <div v-if="session.combatants.length" class="tp-list">
+            <div class="tp-list-title">⚔️ 参战者（{{ session.combatants.length }}）</div>
+            <div v-for="cmb in session.combatants" :key="cmb.id" class="tp-row tp-row-token" :class="{ on: cmb.id === session.currentCombatantId.value }" :title="'卡片ID: ' + (cmb.refId || '—')">
+              <input type="color" v-model="cmb.color" class="tp-col" @click.stop @change="saveSession" />
+              <input type="text" v-model="cmb.name" class="tp-name" @click.stop />
+              <span class="tp-stat">
+                <input type="number" v-model.number="cmb.hp.current" class="tp-hp" min="0" @click.stop @change="saveSession" />
+                <span class="tp-hpsep">/</span>
+                <input type="number" v-model.number="cmb.hp.max" class="tp-hp" min="0" @click.stop @change="saveSession" />
+              </span>
+              <span class="tp-stat">AC{{ cmb.ac }}</span>
+              <el-select v-model="cmb.size" size="small" style="width: 104px" @click.stop>
+                <el-option v-for="o in SIZE_OPTIONS" :key="o.label" :value="o.val" :label="sizeLabel(o.val)" />
+              </el-select>
+              <!-- <button class="tp-del" title="移除" :disabled="session.locked.value" @click.stop="session.removeCombatant(cmb.id)">✕</button> -->
+            </div>
           </div>
 
           <!-- 已放置人物（含 HP/AC） -->
@@ -158,24 +188,24 @@
               <el-select v-model="tok.diameter" size="small" style="width: 116px" @click.stop>
                 <el-option v-for="o in SIZE_OPTIONS" :key="o.label" :value="o.val" :label="sizeLabel(o.val)" />
               </el-select>
-              <button class="tp-del" title="删除" @click.stop="removeToken(tok.id)">✕</button>
+              <button class="tp-del" title="删除" :disabled="session.locked.value" @click.stop="removeToken(tok.id)">✕</button>
             </div>
             <div v-if="!tokens.length" class="tp-empty">暂无人物，从左上角拖入</div>
           </div>
 
-          <!-- 指示物（锥形/圆形，可绑定角色） -->
+          <!-- 法术区域（会话，可绑定参战者） -->
           <div class="tp-list">
-            <div class="tp-list-title">指示物（锥形/圆形）{{ indicators.length }}</div>
-            <div v-for="ind in indicators" :key="ind.id" class="tp-row">
+            <div class="tp-list-title">法术区域（锥形/圆形）{{ session.spellAreas.length }}</div>
+            <div v-for="ind in session.spellAreas" :key="ind.id" class="tp-row">
               <span class="tp-dot" :style="{ background: ind.type === 'circle' ? '#3b82f6' : '#ef4444' }"></span>
               <span class="tp-kind">{{ ind.type === 'circle' ? '🔵' : '🔺' }}{{ ind.ft }}尺</span>
-              <el-select v-model="ind.boundTo" size="small" style="width: 112px" placeholder="绑定角色">
+              <el-select v-model="ind.boundTo" size="small" style="width: 112px" placeholder="绑定参战者" @change="saveSession">
                 <el-option :value="null" label="不绑定" />
-                <el-option v-for="t in tokens" :key="t.id" :value="t.id" :label="t.name || '角色'" />
+                <el-option v-for="t in session.combatants" :key="t.id" :value="t.id" :label="t.name || '角色'" />
               </el-select>
               <button class="tp-del" title="删除" @click.stop="removeIndicator(ind.id)">✕</button>
             </div>
-            <div v-if="!indicators.length" class="tp-empty">暂无指示物，用锥形/圆形工具放置</div>
+            <div v-if="!session.spellAreas.length" class="tp-empty">暂无法术区域，用锥形/圆形工具放置</div>
           </div>
         </template>
       </div>
@@ -186,6 +216,8 @@
 <script lang="ts" setup>
 import { ref, computed, onMounted, onUnmounted, reactive, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import CombatSessionPanel from '../components/CombatSessionPanel.vue'
+import { useCombatSession } from '../composables/useCombatSession'
 import { backendPing, backendFetchMap, backendPublishMap, backendFetchInitiative, getBackendBase, setBackendBase } from '../api/characterBackend'
 import { loadParties, type Party } from '../data/partyModel'
 import { normalizeCharacterCard, type CharacterCard } from '../data/dndModel'
@@ -239,6 +271,9 @@ const pan = ref({ x: 0, y: 0 })
 const tool = ref<'pan' | 'char' | 'measure' | 'cone' | 'circle'>('char')
 const libTab = ref<'party' | 'npc' | 'init'>('party')
 const toolsOpen = ref(true)
+const showLibrary = false // 暂屏蔽左上角色来源面板
+const session = useCombatSession()
+watch(session.drawNotifier, () => drawMap())
 
 const tokens = reactive<Token[]>([])
 const indicators = reactive<Indicator[]>([])
@@ -261,6 +296,7 @@ const measureData = ref('')
 const coneStart = ref<Hex | null>(null)
 const coneFt = ref(30)
 const circleFt = ref(20)
+const spellBind = ref('') // 绑定到某个参战者
 
 const mapBaseInput = ref(getBackendBase())
 const mapOnline = ref(false)
@@ -270,6 +306,7 @@ let syncTimer: ReturnType<typeof setInterval> | null = null
 
 let idCounter = 1
 let dragCharId: number | null = null
+let dragCmbId: string | null = null
 let panDrag = false
 let downOnChar = false
 let downPos = { x: 0, y: 0 }
@@ -301,6 +338,8 @@ onMounted(async () => {
   window.addEventListener('resize', resizeCanvas)
   const canvas = canvasRef.value
   if (canvas) ctx = canvas.getContext('2d')
+  session.loadLocal()
+  session.hookReverb()
   drawMap()
   await initMapBackend()
   onAutoSyncChange()
@@ -385,6 +424,22 @@ function drawMap() {
     drawToken(sp.x, sp.y, charRadius(tok.diameter), tok.color, tok.name, false, tok.id === selectingId.value)
   })
 
+  // 战斗会话：参战者（角色/怪物）
+  session.combatants.forEach((cmb) => {
+    const sp = hexToScreen(cmb.q, cmb.r)
+    drawToken(sp.x, sp.y, charRadius(cmb.size), cmb.color, cmb.name, false, cmb.id === session.currentCombatantId.value)
+  })
+  // 战斗会话：法术区域
+  session.spellAreas.forEach((area) => {
+    let origin = { q: area.q, r: area.r }
+    if (area.boundTo) {
+      const c = session.combatants.find((x) => x.id === area.boundTo)
+      if (c) origin = { q: c.q, r: c.r }
+    }
+    if (area.type === 'circle') drawCircleShape(origin, area.ft)
+    else drawConeShape(origin, area.angle, area.ft)
+  })
+
   if (measureStart.value) {
     const a = hexToScreen(measureStart.value.q, measureStart.value.r)
     const t = measureEnd.value || (tool.value === 'measure' ? hoverPos.value : null)
@@ -402,12 +457,7 @@ function drawMap() {
     drawConeShape(coneStart.value, Math.atan2(b.y - a.y, b.x - a.x), coneFt.value, true)
   }
 
-  // 已放置的锥形 / 圆形指示物（可绑定角色，跟随时用 resolveOrigin）
-  indicators.forEach((ind) => {
-    const origin = resolveOrigin(ind)
-    if (ind.type === 'circle') drawCircleShape(origin, ind.ft)
-    else drawConeShape(origin, ind.angle, ind.ft)
-  })
+  // 会话法术区域已在上面渲染（本地 indicators 不再使用，避免残留无法删除）
 
   // 放置预览：从左上角拖入
   if (dragPayload && hoverPos.value) {
@@ -552,14 +602,6 @@ function renderGrid() {
 }
 
 // 解析指示物原点（若绑定角色则跟随其位置）
-function resolveOrigin(ind: Indicator): Hex {
-  if (ind.boundTo != null) {
-    const t = tokens.find((x) => x.id === ind.boundTo)
-    if (t) return { q: t.q, r: t.r }
-  }
-  return { q: ind.q, r: ind.r }
-}
-
 function drawConeShape(origin: Hex, angle: number, ft: number, isPreview = false) {
   if (!ctx) return
   const sz = size()
@@ -604,20 +646,13 @@ function drawCircleShape(origin: Hex, ft: number) {
 function commitCone(start: Hex, dir: Hex) {
   const a = hexToScreen(start.q, start.r)
   const b = hexToScreen(dir.q, dir.r)
-  indicators.push({ id: idCounter++, type: 'cone', q: start.q, r: start.r, angle: Math.atan2(b.y - a.y, b.x - a.x), ft: coneFt.value, boundTo: null })
-  saveLocal()
-  drawMap()
+  session.addSpellArea({ type: 'cone', q: start.q, r: start.r, angle: Math.atan2(b.y - a.y, b.x - a.x), ft: coneFt.value, boundTo: spellBind.value || null })
 }
 function commitCircle(center: Hex) {
-  indicators.push({ id: idCounter++, type: 'circle', q: center.q, r: center.r, angle: 0, ft: circleFt.value, boundTo: null })
-  saveLocal()
-  drawMap()
+  session.addSpellArea({ type: 'circle', q: center.q, r: center.r, angle: 0, ft: circleFt.value, boundTo: spellBind.value || null })
 }
-function removeIndicator(id: number) {
-  const i = indicators.findIndex((x) => x.id === id)
-  if (i !== -1) indicators.splice(i, 1)
-  saveLocal()
-  drawMap()
+function removeIndicator(id: string) {
+  session.removeSpellArea(id)
 }
 function hexDistance(a: Hex, b: Hex): number {
   const dq = Math.abs(a.q - b.q)
@@ -694,13 +729,14 @@ function onMouseDown(e: MouseEvent) {
     return
   }
   if (tool.value !== 'char') return
-  const tok = characterAt(x, y)
-  downOnChar = !!tok
-  if (tok) {
-    dragCharId = tok.id
-    selectingId.value = tok.id
-  } else {
-    dragCharId = null
+  const hit = hitAt(x, y)
+  downOnChar = !!hit
+  dragCharId = null
+  dragCmbId = null
+  if (hit) {
+    if (hit.kind === 'cmb') dragCmbId = hit.id
+    else dragCharId = hit.id
+    selectingId.value = hit.id
   }
 }
 function onMouseMove(e: MouseEvent) {
@@ -713,7 +749,10 @@ function onMouseMove(e: MouseEvent) {
     drawMap()
     return
   }
-  if (dragCharId != null) {
+  if (dragCmbId != null) {
+    if (Math.hypot(x - downPos.x, y - downPos.y) > 4) moved = true
+    if (hoverPos.value) session.moveCombatant(dragCmbId, hoverPos.value.q, hoverPos.value.r)
+  } else if (dragCharId != null) {
     if (Math.hypot(x - downPos.x, y - downPos.y) > 4) moved = true
     const tok = tokens.find((t) => t.id === dragCharId)
     if (tok && hoverPos.value) {
@@ -758,6 +797,7 @@ function onMouseUp(e: MouseEvent) {
     if (hex) commitCircle(hex)
   }
   dragCharId = null
+  dragCmbId = null
   downOnChar = false
   saveLocal()
   drawMap()
@@ -765,19 +805,29 @@ function onMouseUp(e: MouseEvent) {
 function onMouseLeave() {
   hoverPos.value = null
   dragCharId = null
+  dragCmbId = null
   panDrag = false
   drawMap()
 }
 function onContextMenu(e: MouseEvent) {
+  if (session.locked.value) return // 锁定时屏蔽删除
   const { x, y } = eventPos(e)
-  const tok = characterAt(x, y)
-  if (tok) removeToken(tok.id)
+  const hit = hitAt(x, y)
+  if (hit) {
+    if (hit.kind === 'cmb') session.removeCombatant(hit.id)
+    else removeToken(hit.id)
+  }
 }
-function characterAt(x: number, y: number): Token | null {
+function hitAt(x: number, y: number): { kind: 'token' | 'cmb'; id: any } | null {
+  for (let i = session.combatants.length - 1; i >= 0; i--) {
+    const cmb = session.combatants[i]
+    const p = hexToScreen(cmb.q, cmb.r)
+    if (Math.hypot(p.x - x, p.y - y) <= charRadius(cmb.size) + 4) return { kind: 'cmb', id: cmb.id }
+  }
   for (let i = tokens.length - 1; i >= 0; i--) {
     const tok = tokens[i]
     const p = hexToScreen(tok.q, tok.r)
-    if (Math.hypot(p.x - x, p.y - y) <= charRadius(tok.diameter) + 4) return tok
+    if (Math.hypot(p.x - x, p.y - y) <= charRadius(tok.diameter) + 4) return { kind: 'token', id: tok.id }
   }
   return null
 }
@@ -878,15 +928,16 @@ function clearMeasure() {
   drawMap()
 }
 function clearCone() {
-  const idx = indicators.findIndex((i) => i.type === 'cone')
-  while (idx !== -1) indicators.splice(idx, 1)
+  for (let i = session.spellAreas.length - 1; i >= 0; i--) {
+    if (session.spellAreas[i].type === 'cone') session.removeSpellArea(session.spellAreas[i].id)
+  }
   coneStart.value = null
   saveLocal()
   drawMap()
 }
 function clearCircle() {
-  for (let i = indicators.length - 1; i >= 0; i--) {
-    if (indicators[i].type === 'circle') indicators.splice(i, 1)
+  for (let i = session.spellAreas.length - 1; i >= 0; i--) {
+    if (session.spellAreas[i].type === 'circle') session.removeSpellArea(session.spellAreas[i].id)
   }
   saveLocal()
   drawMap()
@@ -912,6 +963,10 @@ function sizeFromCard(c: CharacterCard): number {
 function sizeLabel(val: number): string {
   const s = SIZE_OPTIONS.find((o) => o.val === val)
   return s ? `${s.label} · ${val}格` : `${val}格`
+}
+function saveSession() {
+  session.saveLocal()
+  session.drawNotifier.value++
 }
 function cardSizeLabel(c: CharacterCard): string {
   return c.size || '中型'
@@ -1177,7 +1232,7 @@ canvas {
 }
 .lp-input {
   flex: 1;
-  min-width: 0;
+  min-width: 50px;
   padding: 4px 6px;
   border: 1px solid #d1d5db;
   border-radius: 6px;
@@ -1398,6 +1453,24 @@ canvas {
   font-size: 12px;
   color: #6b7280;
   white-space: nowrap;
+}
+.tp-hp {
+  width: 44px;
+  padding: 2px 3px;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  text-align: center;
+}
+.tp-col {
+  width: 24px;
+  height: 24px;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  padding: 0;
+  flex: 0 0 auto;
+}
+.tp-hpsep {
+  color: #9ca3af;
 }
 .tp-row-token {
   flex-wrap: wrap;

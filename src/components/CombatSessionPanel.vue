@@ -1,0 +1,392 @@
+<template>
+  <div class="cs-panel">
+    <div class="cs-head">
+      <h3>⚔️ 战斗会话</h3>
+      <span class="cs-status" :class="{ on: online }">{{ online ? '🔴 已连接(长连接)' : '🟢 本地(未连后端)' }}</span>
+    </div>
+
+    <!-- 会话控制 -->
+    <div class="cs-row">
+      <el-select v-model="selectedParty" size="small" style="width: 148px" placeholder="选择团(自动加入会话并带入全团)" @change="onPartySelect">
+        <el-option value="" label="未选择团" />
+        <el-option v-for="p in parties" :key="p.id" :value="p.id" :label="p.name || '团'" />
+      </el-select>
+      <el-button size="small" :type="locked ? 'warning' : 'success'" plain @click="session.toggleLock()">🔒 锁定</el-button>
+      <el-button size="small" type="danger" plain @click="onReset">重置</el-button>
+      <span v-if="sessionId" class="cs-session">会话(团ID): {{ sessionId }}</span>
+    </div>
+
+    <!-- 行动顺序 -->
+    <div v-if="ordered.length" class="cs-order">
+      <div class="cs-order-head">
+        <span>行动顺序</span>
+        <span class="cs-actions">
+          <el-button size="small" text @click="rollInit">🎲 掷先攻</el-button>
+          <el-button size="small" text @click="nextTurn">下回合</el-button>
+          <span v-if="round" class="cs-round">回合 {{ round }}</span>
+        </span>
+      </div>
+      <table class="cs-table">
+        <thead>
+          <tr>
+            <th>次序</th><th>类型</th><th>名字</th><th>优劣</th>
+            <th>掷骰d20</th><th>修正</th><th>最终</th><th>AC</th><th>HP</th><th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="c in ordered" :key="c.id" :class="{ cur: c.id === currentCombatantId }" :title="'卡片ID: ' + (c.refId || '—')">
+            <td class="cs-rk">{{ c.order }}</td>
+            <td><span class="cs-dot" :style="{ background: c.color }"></span><span class="cs-ty">{{ c.type === 'monster' ? '怪' : '角' }}</span></td>
+            <td class="cs-nm">
+              <input type="color" v-model="c.color" class="cs-col" @change="touch" />
+              <span class="cs-nm-txt">{{ c.name }}</span>
+            </td>
+            <td>
+              <el-select v-model="c.advantage" size="small" style="width: 70px" @change="touch">
+                <el-option value="normal" label="普通" /><el-option value="advantage" label="优势" /><el-option value="disadvantage" label="劣势" />
+              </el-select>
+            </td>
+            <td class="cs-roll">{{ c.initiativeRoll || '—' }}</td>
+            <td class="cs-bonus">+{{ c.initiativeBonus }}{{ advNum(c.advantage) >= 0 ? '+' + advNum(c.advantage) : advNum(c.advantage) }}</td>
+            <td class="cs-total">{{ c.initiativeTotal || '—' }}</td>
+            <td>{{ c.ac }}</td>
+            <td class="cs-hp">
+              <input type="number" v-model.number="c.hp.current" class="hp-in" min="0" @change="touch" />
+              <span class="hp-sep">/</span>
+              <input type="number" v-model.number="c.hp.max" class="hp-in" min="0" @change="touch" />
+            </td>
+            <td>
+              <button class="cs-mini" title="换位" :disabled="locked" @click="swapClick(c.id)">⇄</button>
+              <button class="cs-mini del" title="移除" :disabled="locked" @click="remove(c.id)">✕</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- 添加参战者 -->
+    <div class="cs-add">
+      <div class="cs-add-row">
+        <span class="cs-tag">角色</span>
+        <el-select v-model="selectedCard" size="small" style="width: 150px" placeholder="从团选角色" :disabled="locked">
+          <el-option v-for="c in partyCards" :key="c.id" :value="c.id" :label="c.name || '未命名'" />
+        </el-select>
+        <el-button size="small" :disabled="locked" @click="addCard">＋</el-button>
+      </div>
+      <div class="cs-add-row">
+        <span class="cs-tag">怪物</span>
+        <el-input v-model="mon.name" size="small" placeholder="名字" style="width: 84px" :disabled="locked" />
+        <el-input v-model.number="mon.init" size="small" placeholder="先攻" style="width: 56px" :disabled="locked" />
+        <el-input v-model.number="mon.ac" size="small" placeholder="AC" style="width: 52px" :disabled="locked" />
+        <el-input v-model.number="mon.hp" size="small" placeholder="HP" style="width: 56px" :disabled="locked" />
+        <el-select v-model="mon.size" size="small" style="width: 74px" :disabled="locked">
+          <el-option v-for="o in SIZE" :key="o.label" :value="o.val" :label="o.label" />
+        </el-select>
+        <el-button size="small" :disabled="locked" @click="addMob">＋</el-button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script lang="ts" setup>
+import { ref, computed, onMounted } from 'vue'
+import { ElMessage } from 'element-plus'
+import { useCombatSession, type Combatant } from '../composables/useCombatSession'
+import { loadParties, type Party } from '../data/partyModel'
+import { normalizeCharacterCard, type CharacterCard } from '../data/dndModel'
+
+const SIZE = [
+  { label: '微型', val: 0.5 }, { label: '小型', val: 1 }, { label: '中型', val: 1 },
+  { label: '大型', val: 2 }, { label: '巨型', val: 3 }, { label: '超巨型', val: 4 },
+]
+
+const session = useCombatSession()
+const selectedCard = ref('')
+const selectedParty = ref('')
+const mon = ref({ name: '', init: 0, ac: 10, hp: 20, size: 1 })
+
+// 从 store 解构
+const sessionId = session.sessionId
+const ordered = session.orderedCombatants
+const round = session.round
+const currentCombatantId = session.currentCombatantId
+const online = session.online
+const locked = session.locked
+
+// 团里可添加的角色卡
+const partyCards = ref<CharacterCard[]>([])
+const parties = ref<Party[]>([])
+function loadPartyCards() {
+  parties.value = loadParties()
+  if (!parties.value.length) {
+    partyCards.value = []
+    return
+  }
+  if (selectedParty.value) loadCardsForParty(selectedParty.value)
+  else partyCards.value = []
+}
+function loadCardsForParty(partyId: string) {
+  const p = parties.value.find((x) => x.id === partyId)
+  if (!p) {
+    partyCards.value = []
+    return
+  }
+  try {
+    const saved = localStorage.getItem('dnd-character-cards')
+    const list = saved ? JSON.parse(saved) : []
+    partyCards.value = p.memberIds.map((id) => list.find((c: any) => c.id === id)).filter(Boolean).map((c: any) => normalizeCharacterCard(c)).filter((c: any): c is CharacterCard => !!c)
+  } catch (e) {
+    partyCards.value = []
+  }
+}
+
+// 选择团 = 创建/加入该团会话；首次创建才带入全团，否则读取上次数据；未选择团则不改动
+function onPartySelect(id: string) {
+  if (!id) return
+  const res = session.createOrJoinParty(id)
+  loadCardsForParty(id)
+  // 无论首次还是已有数据，都把「角色类参战者」严格对账到当前团成员（去重/剔除其它团）：
+  reconcileParty(partyCards.value)
+  if (!res.existed) ElMessage.success('已创建会话（团ID），并带入全团')
+  else ElMessage.success('已读取该团会话数据')
+}
+
+// 对账：角色类参战者 = 当前团成员（按 refId 增/删；怪物保留，已知位置不动）
+function reconcileParty(cards: CharacterCard[]) {
+  const refIds = new Set(cards.map((c) => c.id))
+  for (let i = session.combatants.length - 1; i >= 0; i--) {
+    const cmb = session.combatants[i]
+    if (cmb.type === 'character' && cmb.refId && !refIds.has(cmb.refId)) session.removeCombatant(cmb.id)
+  }
+  cards.forEach((c) => {
+    if (!session.combatants.some((x) => x.refId === c.id)) session.addCharacter(c)
+  })
+}
+
+function onReset() {
+  session.resetSession()
+  ElMessage.info('已重置')
+}
+function rollInit() {
+  session.rollInitiative()
+  ElMessage.success('已掷先攻')
+}
+function nextTurn() {
+  session.nextRound()
+}
+function touch() {
+  session.saveLocal()
+  session.drawNotifier.value++
+}
+function advNum(a: string): number {
+  return a === 'advantage' ? 5 : a === 'disadvantage' ? -5 : 0
+}
+let swapSel: string | null = null
+function swapClick(id: string) {
+  if (!swapSel) {
+    swapSel = id
+    ElMessage.info('已选中，再点另一个参战者换位')
+  } else if (swapSel === id) {
+    swapSel = null
+  } else {
+    session.swapCombatants(swapSel, id)
+    swapSel = null
+    ElMessage.success('已换位')
+  }
+}
+function remove(id: string) {
+  session.removeCombatant(id)
+}
+function addCard() {
+  const c = partyCards.value.find((x) => x.id === selectedCard.value)
+  if (!c) {
+    ElMessage.warning('请选择角色')
+    return
+  }
+  const added = session.addCharacter(c)
+  ElMessage.success(`已加入 ${added.name}`)
+  selectedCard.value = ''
+}
+function addMob() {
+  const m = mon.value
+  if (!m.name.trim()) {
+    ElMessage.warning('请填怪物名')
+    return
+  }
+  session.addMonster({ name: m.name, ac: m.ac, hp: { current: m.hp, max: m.hp }, size: m.size, initiativeBonus: m.init })
+  mon.value = { name: '', init: 0, ac: 10, hp: 20, size: 1 }
+  ElMessage.success('已添加怪物')
+}
+
+onMounted(() => {
+  session.loadLocal()
+  session.hookReverb()
+  loadPartyCards()
+})
+</script>
+
+<style scoped>
+.cs-panel {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #fff;
+  margin-bottom: 12px;
+}
+.cs-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.cs-head h3 {
+  margin: 0;
+}
+.cs-status {
+  font-size: 12px;
+  color: #9ca3af;
+}
+.cs-status.on {
+  color: #dc2626;
+}
+.cs-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.cs-session {
+  color: #9ca3af;
+  font-size: 12px;
+}
+.cs-order {
+  border: 1px solid #f3f4f6;
+  border-radius: 8px;
+  padding: 6px 8px;
+  margin-bottom: 10px;
+  max-height: 42vh;
+  overflow: auto;
+}
+.cs-order-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+.cs-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.cs-round {
+  color: #4f46e5;
+}
+.cs-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.cs-table th,
+.cs-table td {
+  border: 1px solid #e5e7eb;
+  padding: 3px 5px;
+  text-align: center;
+  white-space: nowrap;
+}
+.cs-table th {
+  background: #f3f4f6;
+}
+.cs-table tr.cur {
+  background: #eef2ff;
+}
+.cs-rk {
+  font-weight: 700;
+  color: #4f46e5;
+}
+.cs-ty {
+  color: #9ca3af;
+  font-size: 11px;
+  margin-left: 3px;
+}
+.cs-nm {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  text-align: left;
+  font-weight: 600;
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cs-col {
+  width: 24px;
+  height: 24px;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  padding: 0;
+  flex: 0 0 auto;
+}
+.cs-nm-txt {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cs-roll {
+  color: #6b7280;
+}
+.cs-bonus {
+  color: #2563eb;
+}
+.cs-total {
+  font-weight: 700;
+  color: #b45309;
+}
+.cs-hp {
+  color: #b91c1c;
+}
+.hp-in {
+  width: 48px;
+  padding: 2px 4px;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  text-align: center;
+}
+.hp-sep {
+  color: #9ca3af;
+  margin: 0 2px;
+}
+.cs-mini {
+  border: 1px solid #d1d5db;
+  background: #fff;
+  border-radius: 4px;
+  width: 18px;
+  height: 18px;
+  line-height: 1;
+  cursor: pointer;
+  font-size: 12px;
+  margin: 0 1px;
+}
+.cs-mini.del {
+  color: #dc2626;
+  border-color: #fecaca;
+  margin-left: 6px;
+}
+.cs-add {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cs-add-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.cs-tag {
+  font-size: 12px;
+  color: #6b7280;
+  width: 34px;
+}
+</style>
