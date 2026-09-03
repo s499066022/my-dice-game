@@ -1,217 +1,230 @@
-# DnD 工具箱 — 后端 API 契约
+# DnD 工具箱 — API 契约（最终版）
 
-> 给 Laravel 后端实现的权威接口文档。前端已按本契约接线（未上线前用 `localStorage` 兜底；后端可用后自动切长连接）。
-> 基础地址：`http://localhost:12226/api`（线上 `http://106.12.131.21/api`）。
+> **实现状态**：本文档所有端点/事件/表均已在前端接线，后端（Laravel + Reverb，repo `s499066022/chain`）
+> 已实现并通过双浏览器/双设备联测；**部署到服务器前需拉取 chain 最新 main**。
+> 前端仓库：`s499066022/my-dice-game`（Vue3 + Vite + Element Plus）。
 
-## 通用约定
-- 返回 `application/json; charset=utf-8`；中文用 `JSON_UNESCAPED_UNICODE`。
-- 成功：`{"ok":true, ...}`；失败：`{"ok":false,"error":"..."}`（400/500）。
-- 前端会先 `GET /ping` 判断在线。
-- CORS（跨域直连）：`allowed_origins => ['*']`、`methods => ['GET','POST','PUT','PATCH','DELETE','OPTIONS']`、`headers => ['Content-Type','Accept']`；`options` 处理预检。开发时前端 `/api` 走 Vite 代理到 12226，无需 CORS。
-- **Reverb**：前端 `laravel-echo`（`broadcaster:'reverb'`），订阅 `presence-combat.{sessionId}`；广播接入 `config/broadcasting.php` 与 `routes/channels.php`。
+- 本地后端：`http://localhost:12226/api`（Docker：nginx 反代 php-fpm，WS 经 `/app` 反代到 php 容器 Reverb 8080）
+- 线上后端：`http://106.12.131.21:12226/api`（nginx 同构）
+- 所有 JSON 中文使用 `JSON_UNESCAPED_UNICODE`；请求/响应一律 UTF-8。
+
+---
+
+## 0. 通用约定
+
+- 成功 `{"ok":true, ...}`；失败 `{"ok":false,"error":"..."}`，HTTP 400/403/404/500 对应语义。
+- **CORS**（跨域直连）：`allowed_methods = GET,POST,PUT,PATCH,DELETE,OPTIONS`；
+  `allowed_headers = Content-Type, Accept, Authorization, X-Dnd-User`；`allowed_origins = ['*']`（已含 localhost:5173）。
+  开发时前端 `/api` 走 Vite 代理，同源无 CORS。
+- **鉴权/成员标识（v1 无账号体系）**：Reverb 频道鉴权 `POST {base}/broadcasting/auth`
+  body `{socket_id, channel_name}`；可带 `X-Dnd-User` 请求头区分 presence 成员（缺省 `guest`）。
+  返回 `{auth:"appKey:hmac", channel_data}`。
+- **写入类资源多数为“整体/块合并”**：见各节。多人同时整库覆盖有互相覆盖风险，前端已做“拉取合并后回写”；
+  强烈建议生产环境给关键表加行锁/唯一索引（见 §8 注）。
+- 时间戳一律 ISO8601 字符串（`updatedAt/created_at/updated_at`）。
 
 ---
 
 ## 1. 连通检测
+
 | 方法 | 路径 | 返回 |
 |---|---|---|
 | GET | `/api/ping` | `{"ok":true}` |
 
-## 2. 角色卡库（列表轻量 + 战斗核心实时 + 分块懒加载 + 法术独立分页）
+---
 
-> 目标：角色卡很多、法术可上百条，**不整卡整传**。打开 角色卡/团/地图/先攻 页只拉
-> "轻量核心"（名字 + 战斗数据）；编辑其它选项卡按需加载；法术独立分页 CRUD。
+## 2. 角色卡库（v2：轻量列表 + 分块 + 法术独立分页）
 
-| 方法 | 路径 | 请求体 | 返回 |
+> 设计目标：卡多/法术多时不整卡整传。列表、团、地图、先攻只使用 **LightCard**（名字+战斗核心）；
+> 编辑其它选项卡按需加载块；法术是独立表分页 CRUD。
+
+| 方法 | 路径 | 请求体 | 返回/说明 |
 |---|---|---|---|
-| GET | `/api/characters/light` | — | `{"ok":true,"data":[<LightCard>...]}` |
-| GET | `/api/characters` | — | `{"ok":true,"data":[<CharacterCard整卡>...]}`（导出/迁移用，保留兼容） |
-| POST | `/api/characters/sync` | `{"data":[<CharacterCard>...]}` | 整库覆盖（保留兼容，仅导入/迁移用） |
-| GET | `/api/characters/{id}/blocks/{block}` | — | `{"ok":true,"data":{<该块顶层字段>}}` |
-| PATCH | `/api/characters/{id}/blocks/{block}` | `{"data":{<该块字段子集>}}` | `{"ok":true}`（浅合并进 payload；写后广播） |
+| GET | `/api/characters/light` | — | `{"ok":true,"data":[<LightCard>...]}`（按 name 排序） |
+| GET | `/api/characters/{id}/blocks/{block}` | — | `{"ok":true,"data":{该块顶层字段}}`（404=卡不存在 / 400=未知块） |
+| PATCH | `/api/characters/{id}/blocks/{block}` | `{"data":{...}}` | 顶层**浅合并**进 payload（行锁），成功广播 `CharacterCardUpdated`；404=卡不存在 |
+| DELETE | `/api/characters/{id}` | — | 删除卡 + 连带删除 `character_spells`，广播 `CharacterCardRemoved` |
+| GET | `/api/characters` | — | 整卡列表（导出/迁移/兼容保留） |
+| POST | `/api/characters/sync` | `{"data":[<CharacterCard>...]}` | **整库覆盖**（事务清空重写；自动把 payload.spells 抽到 character_spells）→ 仅导入/迁移/兜底用 |
 
-**LightCard（轻量核心 = 战斗/资源页所需，列表/团/地图/先攻只用它）**：
+**LightCard**（= combat 块字段 + 元数据；含 AC 三要素与 abilities，客户端据此可算 AC/先攻）：
 ```jsonc
 { "id":"...", "name":"葛罗格",
-  "hp":{"current":87,"max":115}, "tempHp":0, "hitDice":{"current":9,"max":10,"formula":"1d12"},
-  "acBonus":0, "armor":{...ArmorDef}, "shield":{...ShieldDef},   // AC 三要素
+  "hp":{"current":87,"max":115}, "tempHp":0,
+  "hitDice":{"current":11,"max":11,"formula":"1d12"},
+  "acBonus":0, "armor":{...}, "shield":{...},
   "initiativeBonus":2, "initiativeAdvantage":"normal",
-  "abilities":{ "str":{...}, "dex":{...}, "con":{...}, "int":{...}, "wis":{...}, "cha":{...} }, // 先攻需敏捷调整
+  "abilities":{"str":{...},"dex":{...},"con":{...},"int":{...},"wis":{...},"cha":{...}},
   "speed":"30 尺","size":"中型",
-  "resistances":"","immunities":"","conditions":[],"passivePerception":15,
-  "resources":[<CardResource>...],
-  "updatedAt":"iso" }
+  "resistances":"", "immunities":"", "conditions":[], "passivePerception":15,
+  "resources":[<CardResource>...], "updatedAt":"iso" }
 ```
-> 客户端用 LightCard 即可算出 AC 与先攻，**无需其它块**。
 
-**分块（编辑选项卡按需加载/保存；后端把 data 顶层浅合并进 payload JSON）**：
-| block | 顶层字段 |
+**分块字段表**（`block` ∈ 下表；GET 只返回存在的键）：
+| block | CharacterCard 顶层字段 |
 |---|---|
-| `combat` | hp, tempHp, hitDice, acBonus, armor, shield, initiativeBonus, initiativeAdvantage, abilities, speed, size, resistances, immunities, conditions, passivePerception, resources（=LightCard 主体） |
+| `combat` | hp, tempHp, hitDice, acBonus, armor, shield, initiativeBonus, initiativeAdvantage, abilities, speed, size, resistances, immunities, conditions, passivePerception, resources |
 | `basic` | playerName, race, background, alignment, classes, xp, proficiencyBonus, portraitUrl |
 | `skills` | skills, weaponsProficient, armorProficient, languages, tools |
-| `equipment` | weapons, equipment（武器/装备列表；护甲/盾牌在 combat 块） |
+| `equipment` | weapons, equipment（护甲/盾牌在 combat 块） |
 | `features` | classFeatures, racialFeatures, feats, specialAbilities |
 | `spellconfig` | spellAbility, spellDc, spellAttackBonus, spellSlots |
 | `wealth` | money, weightCapacity, note |
 
-> - `combat` 块**进入角色卡页即全部加载**（默认选中的"战斗/资源"页），并走长连接实时同步；
->   其余块在用户切到对应选项卡时才 `GET /blocks/{block}` 加载、编辑后 `PATCH`。
-> - id 不存在（新建卡）时 PATCH 返回 404，前端自动整库 `sync` 补建一次后重试。
-> - 浅合并即 `$payload = array_merge($payload, $data)`（数组/对象整块替换），建议行锁（lockForUpdate）。
-> - 合并写接口统一广播 `CharacterCardUpdated`（见 §7 实时事件），前端据此实时更新。
+> - 浅合并 = `$payload = array_merge($payload, $data)`（数组/对象整块替换）；建议行锁（实现已 lockForUpdate）。
+> - `name` 随 light/整卡返回；改名字段随 `combat` 块 PATCH 一起传即可（merge 不做块白名单过滤）。
+> - 新建卡（本地有、远端无）→ PATCH 404 → 前端自动整库 `sync` 补建一次再重试。
 
-### 2.1 法术（独立表，分页 CRUD；payload 内不再存 spells）
-| 方法 | 路径 | 请求体 | 返回 |
+### 2.1 法术（独立表 character_spells，分页 CRUD）
+
+| 方法 | 路径 | 请求体/参数 | 返回/说明 |
 |---|---|---|---|
-| GET | `/api/characters/{id}/spells` | `?page=1&per_page=20&q=<关键字>` | `{"ok":true,"data":{"items":[<Spell>],"total":N,"page":1,"per_page":20}}` |
-| POST | `/api/characters/{id}/spells` | `<Spell>` | `{"ok":true,"data":<Spell>}` |
-| PATCH | `/api/spells/{id}` | `<Spell字段子集>` | `{"ok":true}` |
-| DELETE | `/api/spells/{id}` | — | `{"ok":true}` |
+| GET | `/api/characters/{id}/spells` | `?page=1&per_page=20&q=<名/学派/效果>&level=<0-9>` | `{"ok":true,"data":{"items":[<Spell>],"total":N,"page":P,"per_page":S}}`；排序 level 升序→name 升序 |
+| POST | `/api/characters/{id}/spells` | `<Spell>` | `{"ok":true,"data":<Spell>}`；缺 id 自动生成；广播 `SpellUpdated` |
+| PATCH | `/api/spells/{id}` | `<Spell 字段子集>` | 浅合并进 payload；广播 `SpellUpdated` |
+| DELETE | `/api/spells/{id}` | — | 广播 `SpellUpdated`（spell 带 `deleted:true`） |
 
-> `Spell`（`character_spells.payload`，不透明 JSON）：`{id, level, name, school, ritual, castingTime, range, duration, v, s, m, material, effect, description, ...}`。
-> 排序建议 `level` 升序、`name` 升序；`q` 匹配 name/school/effect。写接口广播 `SpellUpdated`。
+**Spell**（不透明 JSON）：`{id, status, level(0-9), school, ritual, name, castingTime, range, duration, v, s, m, material, effect, description, ...}`。
+> 法术库（内置 543 条 + 自定义）是**前端本地功能**，不占后端存储；选中后经上述 POST 以副本入库到该角色。
 
-### 2.2 实时（presence-characters）
-- 频道 `presence-characters`（事件裸名，载荷在 `e.data`）：
+### 2.2 角色卡实时频道（presence-characters）
+
 | 事件 | 载荷 | 触发 |
 |---|---|---|
-| `CharacterCardUpdated` | `{id, block, data:{...}}` | 任意块 PATCH 成功后广播 |
-| `CharacterCardRemoved` | `{id}` | 删除角色卡 |
-| `SpellUpdated` | `{card_id, spell}`（删除时 spell 带 `deleted:true`） | 法术增/改/删 |
+| `CharacterCardUpdated` | `{id, block, data:{...}}` | 任意块 PATCH 成功 |
+| `CharacterCardRemoved` | `{id}` | DELETE 角色卡 |
+| `SpellUpdated` | `{card_id, spell}`（删除时 spell.deleted=true） | 法术增/改/删 |
+
+---
 
 ## 3. 团（Party）
-| 方法 | 路径 | 请求体 | 返回 |
+
+| 方法 | 路径 | 请求体 | 返回/说明 |
 |---|---|---|---|
-| GET | `/api/parties` | — | `{"ok":true,"data":[<Party>...]}` |
-| POST | `/api/parties/sync` | `{"data":[<Party>...]}` | `{"ok":true,"count":N}` |
+| GET | `/api/parties` | — | `{"ok":true,"data":[<Party>...]}`（updated_at 倒序） |
+| POST | `/api/parties/sync` | `{"data":[<Party>...]}` | **整库覆盖**（事务清空重写）；成功后广播 `PartiesChanged`（presence-parties）→ `{"ok":true,"count":N}` |
 
-**Party**：
-```jsonc
-{ "id":"...", "name":"团 1", "member_ids":["卡片id1","卡片id2"], "dm_user_id":"...", "created_at":"iso","updated_at":"iso" }
-```
-> 每个角色只能属于一个团（前端保证）。**团 id = 战斗会话 id**。
+**Party**：`{"id":"...","name":"团 1","dm_user_id":"...","member_ids":["卡id"...],"created_at","updated_at"}`
+（payload 原样存储；member 键名兼容 `member_ids` / `memberIds`）。
+> **团 id = 战斗会话 id**。团数据低变更，实时用「整库广播 + 各端整体刷新」即可；删除/改名也会随全量广播扩散。
+> 实时频道：**presence-parties**，事件 `PartiesChanged` 载荷 `{parties:[<Party>...]}`。
 
-## 4. 先攻结果（全局共享一份）
+---
+
+## 4. 先攻结果（全局共享一份，兼容保留）
+
 | 方法 | 路径 | 请求体 | 返回 |
 |---|---|---|---|
 | GET | `/api/initiative` | — | `{"ok":true,"data":[<InitiativeRow>...],"updatedAt":"iso"}` |
 | POST | `/api/initiative` | `{"data":[<InitiativeRow>...]}` | `{"ok":true}` |
 
-**InitiativeRow**：`{ "id":3,"type":"玩家","name":"瓦肯","base":17,"bonus":2,"advantageNum":0,"advantageText":"普通","total":19 }`
+**InitiativeRow**：`{"id":3,"type":"玩家","name":"瓦肯","base":17,"bonus":2,"advantageNum":0,"advantageText":"普通","total":19}`
 
-## 5. 地图（战场，全局共享）— 兼容保留
+---
+
+## 5. 地图（自由地图，兼容保留，不再被主流程使用）
+
 | 方法 | 路径 | 请求体 | 返回 |
 |---|---|---|---|
 | GET | `/api/map` | — | `{"ok":true,"data":{"tokens":[...],"indicators":[...],"npcs":[...],"updatedAt":"iso"}}` |
 | POST | `/api/map` | `{"data":{"tokens":[...],"indicators":[...],"npcs":[...]}}` | `{"ok":true}` |
 
-**MapToken** `{"id":1,"name":"葛罗格","color":"#ef4444","q":3,"r":-1,"diameter":2}`；**体型占格** 微型0.5/小中1/大2/巨3/超巨4（1 格=5 尺）。
-> 说明：战斗会话已是主流程，此 `/map` 仅在非会话的"自由地图"使用，**可保留兼容**。
+> 前端主流程已完全走战斗会话长连接，此接口仅遗留兼容。已知问题：空表时 GET 可能 500（待后端补兜底，不影响会话）。
 
 ---
 
-## 6. 战斗会话（核心，配合 Reverb）
-> **团 id = 会话 id**。选团即"创建/加入"该会话。前端会**把角色类参战者自动对账到团成员**（首次带入全团，之后读取上次并按团成员增/删，保留怪物与已有位置）。支持**锁定**（锁定时禁增删/移动）。
+## 6. 战斗会话（核心：团 id = 会话 id）
 
-| 方法 | 路径 | 请求体 | 返回 |
+| 方法 | 路径 | 请求体 | 返回/说明 |
 |---|---|---|---|
-| POST | `/api/combat-sessions` | `{"party_id":"...","dm_user_id":"..."}` | `{"ok":true,"data":{<CombatSession>}}` |
-| GET | `/api/combat-sessions/{id}` | — | `{"ok":true,"data":{<CombatSession快照>}}` |
-| POST | `/api/combat-sessions/{id}/combatants/sync` | `{"combatants":[<Combatant>...]}` | `{"ok":true,"count":N}`（对账替换角色类，保留怪物） |
-| POST | `/api/combat-sessions/{id}/combatants` | `{...Combatant}` | `{"ok":true,"data":{Combatant}}` |
-| PATCH | `/api/combatants/{id}` | `{q?,r?,hp?,order?,initiative_roll?,initiative_total?,advantage?,color?,name?,size?,ac?}` | `{"ok":true}` |
-| DELETE | `/api/combatants/{id}` | — | `{"ok":true}` |
-| POST | `/api/combatants/{id}/swap` | `{"other_id":"..."}` | `{"ok":true}`（互换 order） |
-| POST | `/api/combat-sessions/{id}/roll-initiative` | — | `{"ok":true,"data":{"order":[{"combatant_id","order","initiative_total"}]}}` |
-| POST | `/api/combat-sessions/{id}/lock` | `{"locked":true}` | `{"ok":true}` |
-| POST | `/api/combat-sessions/{id}/spell-areas` | `{...SpellArea}` | `{"ok":true,"data":{SpellArea}}` |
-| PATCH | `/api/spell-areas/{id}` | 同 SpellArea | `{"ok":true}` |
-| DELETE | `/api/spell-areas/{id}` | — | `{"ok":true}` |
-| POST | `/api/combat-sessions/{id}/turn` | — | `{"ok":true,"data":{current_combatant_id, round}}` |
+| POST | `/api/combat-sessions` | `{"party_id":"...","dm_user_id":"..."}` | 幂等建会（id=party_id）；广播 `CombatSessionState` |
+| GET | `/api/combat-sessions/{id}` | — | 快照；不存在自动建会 |
+| POST | `/api/combat-sessions/{id}/combatants/sync` | `{"combatants":[<Combatant>...]}` | **对账**：按 ref_id 增/改角色类、删除不在名单的角色类、保留怪物；广播全量快照 |
+| POST | `/api/combat-sessions/{id}/combatants` | `<Combatant>` | 新增参战者；同 ref_id 防重复（403/400）；锁定时 403；广播 `CombatantAdded` |
+| PATCH | `/api/combatants/{id}` | `{q?,r?,hp?,order?,initiative_roll?,initiative_total?,advantage?,color?,name?,size?,ac?}` | 锁定时禁移动/换位(403)；广播 `CombatantUpdated` |
+| DELETE | `/api/combatants/{id}` | — | 锁定时 403；广播 `CombatantRemoved` |
+| POST | `/api/combatants/{id}/swap` | `{"other_id":"..."}` | 互换 order；广播 `CombatantSwapped` |
+| POST | `/api/combat-sessions/{id}/roll-initiative` | — | d20+加值+优劣(±5) 排序重编 order；广播 `InitiativeRolled`；锁定 403 |
+| POST | `/api/combat-sessions/{id}/lock` | `{"locked":true\|false}` | 广播 `SessionLocked` |
+| POST | `/api/combat-sessions/{id}/turn` | — | 下一个行动者；到尾 round+1；广播 `TurnChanged` |
+| POST | `/api/combat-sessions/{id}/spell-areas` | `<SpellArea>` | 新增区域；广播 `SpellAreaUpdated` |
+| PATCH | `/api/spell-areas/{id}` | `<SpellArea 子集>` | 改（含绑定点）；广播 `SpellAreaUpdated` |
+| DELETE | `/api/spell-areas/{id}` | — | 广播 `SpellAreaUpdated`（deleted:true） |
 
 **CombatSession 快照**：
 ```jsonc
-{ "id":"团id","party_id":"团id","dm_user_id":"...",
-  "state":"setup|initiative|combat|ended","locked":false,
-  "current_combatant_id":"...","round":1,
-  "combatants":[ <Combatant>... ], "spell_areas":[ <SpellArea>... ] }
+{ "id":"团id","party_id":"团id","dm_user_id":"...", "state":"setup|initiative|combat|ended",
+  "locked":false, "current_combatant_id":"...","round":1,
+  "combatants":[<Combatant>...], "spell_areas":[<SpellArea>...] }
 ```
 
-**Combatant**（参战者 = 角色或怪物）：
+**Combatant**：
 ```jsonc
-{ "id":"c1","type":"character|monster","ref_id":"角色卡id或空",
-  "name":"构装骑士","color":"#ef4444","size":2,
-  "q":3,"r":-1,
-  "order":1,"initiative_roll":17,"initiative_bonus":5,"initiative_total":22,
-  "advantage":"normal|advantage|disadvantage",
-  "ac":18,"hp":{"current":190,"max":201},
-  "controlled_by":"玩家id或dm","payload":{ ...怪物卡/角色卡完整信息(可选) } }
+{ "id":"c1","type":"character|monster","ref_id":"角色卡id或null",
+  "name":"葛罗格","color":"#ef4444","size":2,"q":3,"r":-1,
+  "order":1,"initiative_roll":17,"initiative_bonus":2,"initiative_total":22,
+  "advantage":"normal|advantage|disadvantage","ac":15,"hp":{"current":87,"max":115},
+  "controlled_by":"...","payload":null|{...} }
 ```
-- **`ref_id`**：角色类必填（= 角色卡 id），用于**去重**（同一角色卡只入一次）。
-- `initiative_total = initiative_roll + initiative_bonus + 优劣值(±5) + 装备修正`。
-- **攻击/释放的怪物**：`payload` 记录怪物卡完整信息（属性/技能/动作/反应/免疫…，第一版只存不展示，供图鉴）。
+- 角色类 `ref_id` 必填用于去重；`initiative_total = initiative_roll + initiative_bonus + 优劣(±5)`。
+- **载荷上限**：Reverb 单条约 10KB。角色类 payload 一律 null（完整卡经 ref_id 关联 characters）；
+  怪物 payload 供将来图鉴，控制 < ~6KB。
+- **并发去重建议**：`combatants(session_id, ref_id)` 唯一索引 + sync/store 事务行锁（当前未加索引，极端并发下可能重复，可加）。
 
-> **载荷上限**：Reverb/Pusher 单条消息约 10KB。快照/事件会整体广播，**参战者 payload 务必精简**
-> （角色卡完整数据在 `characters` 表，前端已通过 `ref_id` 关联，不重复写入 combatant.payload；角色 payload 一律传 null）。
-> 怪物 payload 为将来图鉴预留，请控制单卡 < ~6KB，避免多人同会时快照超限。
-
-> **并发去重**：`combatants/sync` 按 `ref_id` 对账。两人几乎同时为同一团建会并 sync 时，
-> 两个事务互不可见可能各插入一行（同 ref_id 双份）。建议对 `combatants(session_id, ref_id)` 加唯一索引
-> （`type='character'` 且 `ref_id` 非空时生效），并在 sync/store 事务内对行加锁（`lockForUpdate`）规避。
-
-**SpellArea**（法术区域）：
-```jsonc
-{ "id":"...","type":"cone|circle","q":3,"r":-1,"angle":0.6,"ft":30,"bound_to":"c1" }
-```
-- `bound_to`：绑定某个 Combatant id，**跟随其移动**；（q,r 为初始，绑定后以绑定者坐标为准）。
+**SpellArea**：`{"id":"...","type":"cone|circle","q":3,"r":-1,"angle":0.6,"ft":30,"bound_to":"c1"}`（bound_to 跟随移动）。
 
 ---
 
-## 7. Reverb 实时事件
-- 前端 `laravel-echo` 监听 `.EventName`（事件裸名，载荷在 `e.data`）。
+## 7. Reverb 实时事件（总表）
 
-### presence-characters（角色卡实时，见 §2.2）
-| 事件 | 载荷 | 触发 |
+频道均 presence；前端 `laravel-echo` 以 `.EventName` 监听（事件裸名，载荷在 `e.data`）。
+
+| 频道 | 事件 | 载荷 |
 |---|---|---|
-| `CharacterCardUpdated` | `{id, block, data}` | 角色卡任一块写入后 |
-| `CharacterCardRemoved` | `{id}` | 删除角色卡 |
-| `SpellUpdated` | `{card_id, spell}`（删除带 `deleted:true`） | 法术增/改/删 |
+| `presence-characters` | `CharacterCardUpdated` | `{id, block, data}` |
+| `presence-characters` | `CharacterCardRemoved` | `{id}` |
+| `presence-characters` | `SpellUpdated` | `{card_id, spell}`（删除 spell.deleted=true） |
+| `presence-parties` | `PartiesChanged` | `{parties:[...]}` |
+| `presence-combat.{sessionId}` | `CombatSessionState` | 会话快照 |
+| `presence-combat.{sessionId}` | `CombatantAdded` | `{combatant}` |
+| `presence-combat.{sessionId}` | `CombatantUpdated` | `{combatant}` |
+| `presence-combat.{sessionId}` | `CombatantRemoved` | `{combatant_id}` |
+| `presence-combat.{sessionId}` | `InitiativeRolled` | `{order:[{combatant_id,order,initiative_total}]}` |
+| `presence-combat.{sessionId}` | `CombatantSwapped` | `{a_id,b_id}` |
+| `presence-combat.{sessionId}` | `SpellAreaUpdated` | `{spell_area}`（删除带 deleted） |
+| `presence-combat.{sessionId}` | `TurnChanged` | `{current_combatant_id, round}` |
+| `presence-combat.{sessionId}` | `SessionLocked` | `{locked}` |
 
-### presence-combat.{sessionId}（战斗会话）
-- 频道：`presence-combat.{sessionId}`（可在线成员：DM+玩家）。
-
-| 事件 | 载荷 | 触发 |
-|---|---|---|
-| `CombatSessionState` | 会话快照 | 进频道/建会/加入 |
-| `CombatantAdded` | `{ combatant }` | 新增参战者 |
-| `CombatantUpdated` | `{ combatant }` | 位置/HP/先攻/次序/颜色改 |
-| `CombatantRemoved` | `{ combatant_id }` | 移除参战者 |
-| `InitiativeRolled` | `{ order:[{combatant_id,order,initiative_total}] }` | 掷先攻 |
-| `CombatantSwapped` | `{ a_id, b_id }` | 换位 |
-| `SpellAreaUpdated` | `{ spell_area }` | 放/改/删法术区 |
-| `TurnChanged` | `{ current_combatant_id, round }` | 切回合 |
-| `SessionLocked` | `{ locked }` | 锁定/解锁 |
-
-> 权威态在服务端；客户端收到事件只更新本地渲染，不轮询。
+> 权威态在服务端；客户端收到事件只更新本地渲染，不轮询。前端所有写入成功后在日志面板可见“发送/接收”闭环。
 
 ---
 
-## 8. 建议表结构（Laravel）
-- `characters`：`id(string PK), name, payload(json), updated_at`（payload 含 LightCard+各块，**不含 spells**）
-- `character_spells`：`id(string PK), character_id, payload(json: Spell), created_at, updated_at`（索引 character_id, level）
+## 8. 表结构（Laravel 实际）
+
+- `characters`：`id(string PK), name, payload(json: LightCard+各块, 不含 spells), updated_at`
+- `character_spells`：`id(string PK), character_id, payload(json: Spell), created_at, updated_at`（建议索引 character_id, level）
 - `parties`：`id(string PK), name, dm_user_id, payload(json), updated_at`
-- `initiative_results`：单行 `payload(json), updated_at`
-- `map_state`：单行 `payload(json){tokens,indicators,npcs}, updated_at`
-- `combat_sessions`：`id(string PK, =party_id), party_id, dm_user_id, state, locked(bool), current_combatant_id, round, updated_at`
-- `combatants`：`id(string PK), session_id, type, ref_id, name, color, size, q, r, ord, initiative_roll, initiative_bonus, initiative_total, advantage, ac, hp(payload/json), controlled_by, payload(json), updated_at`
+- `initiative_results`：单行 payload(json)
+- `map_state`：单行 payload(json){tokens,indicators,npcs}
+- `combat_sessions`：`id(string PK,=party_id), party_id, dm_user_id, state, locked(bool), current_combatant_id, round, updated_at`
+- `combatants`：`id(string PK), session_id, type, ref_id, name, color, size, q, r, ord, initiative_roll, initiative_bonus, initiative_total, advantage, ac, hp(json), controlled_by, payload(json), updated_at`
 - `spell_areas`：`id(string PK), session_id, type, q, r, angle, ft, bound_to, updated_at`
 
-## 9. 建议实现顺序
-1. Reverb 安装/配置 + `Broadcast::routes()`。
-2. 迁移：现有表 + 新增 `character_spells`；**脚本把旧 `characters.payload.spells` 抽到 `character_spells`**（原 payload 中 spells 置空）。
-3. 角色卡新接口：`GET /characters/light` → `GET/PATCH /characters/{id}/blocks/{block}` → spells 分页 CRUD。
-4. `presence-characters` 广播（写接口后 `broadcast(CharacterCardUpdated/SpellUpdated)`）。
-5. 战斗会话表/接口（`combat_sessions/combatants/spell_areas` + `combatants/sync` 对账）。
-6. 会话广播事件（`CombatSessionState/Combatant*...`）。
-7. Echo 鉴权（`presence` + `Authorization`），前端直连联测。
+> 迁移（历史）说明：旧版本把法术内嵌 `characters.payload.spells`；`characters/sync` 现在会自动 `splitSpells` 抽到 `character_spells` 并把 payload.spells 置空，无需手工脚本。
+
+---
+
+## 9. 部署与注意事项
+
+1. 后端部署：拉取 `chain` main 后执行迁移（已含 character_spells）并启动 Reverb（`php artisan reverb:start`，容器内 `--host=0.0.0.0 --port=8080`，nginx `/app` 反代）。
+2. CORS 需包含 PATCH/DELETE 与 `X-Dnd-User`（config/cors.php 已更新）。
+3. Reverb/Pusher 消息约 10KB 上限：payload 精简 + 分块同步即为此设计。
+4. `characters/sync`、`parties/sync` 为整库覆盖：仅供迁移/导入/离线兜底；日常编辑走块/单条接口。多人协作前建议先拉后改（前端已自动拉取合并）。
+5. 本地联调速查：
+```bash
+curl http://localhost:12226/api/ping
+curl http://localhost:12226/api/characters/light
+curl -X PATCH http://localhost:12226/api/characters/{id}/blocks/combat -H 'Content-Type: application/json' \
+     -d '{"data":{"hp":{"current":90,"max":115}}}'
+curl "http://localhost:12226/api/characters/{id}/spells?page=1&per_page=20&level=3&q=火球"
+```
