@@ -85,9 +85,10 @@ export async function backendPatchCardBlock(id: string, block: string, data: any
   return apiJson('PATCH', `/characters/${encodeURIComponent(id)}/blocks/${encodeURIComponent(block)}`, { data })
 }
 
-export async function backendFetchSpells(cardId: string, page = 1, perPage = 20, q = ''): Promise<any | null> {
+export async function backendFetchSpells(cardId: string, page = 1, perPage = 20, q = '', level?: number | null): Promise<any | null> {
   const qs = new URLSearchParams({ page: String(page), per_page: String(perPage) })
   if (q) qs.set('q', q)
+  if (level !== undefined && level !== null) qs.set('level', String(level))
   const r = await apiJson('GET', `/characters/${encodeURIComponent(cardId)}/spells?${qs.toString()}`)
   return r && r.ok === true && r.data ? r.data : null
 }

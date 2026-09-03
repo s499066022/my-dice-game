@@ -450,6 +450,11 @@
               </div>
               <div class="cm-panel cm-panel-wide">
                 <h4>法术列表（按环位排列）</h4>
+                <!-- 固定环位筛选：0-9 环 / 全部 -->
+                <div class="cm-spell-levels">
+                  <button :class="{ on: spellsLevel === null }" @click="onSpellLevel(null)">全部</button>
+                  <button v-for="lv in 10" :key="lv" :class="{ on: spellsLevel === lv - 1 }" @click="onSpellLevel(lv - 1)">{{ lv - 1 }} 环</button>
+                </div>
                 <!-- v2：服务端分页 -->
                 <template v-if="mode === 'v2'">
                   <div class="cm-spell-toolbar">
@@ -497,7 +502,7 @@
                         </tr>
                       </thead>
                       <tbody>
-                        <tr v-for="sp in sortedSpells" :key="sp.id">
+                        <tr v-for="sp in filteredLegacySpells" :key="sp.id">
                           <td>
                             <el-select v-model="sp.status" size="small" style="width: 84px">
                               <el-option v-for="st in SPELL_STATUSES" :key="st" :value="st" :label="st" />
@@ -627,6 +632,7 @@ const mode = ref<'v2' | 'legacy'>('legacy')
 type BlockSet = Set<CardBlock>
 const blockLoaded = new Map<string, BlockSet>() // cardId -> 已加载块
 const spellsSearch = ref('')
+const spellsLevel = ref<number | null>(null) // 环位筛选：null=全部，0-9
 const spellsPage = ref(1)
 const spellsPerPage = ref(20)
 const spellsTotal = ref(0)
@@ -695,6 +701,13 @@ const sortedSpells = computed(() => {
   const c = currentCard.value
   if (!c) return []
   return [...c.spells].sort((a, b) => (a.level || 0) - (b.level || 0) || a.name.localeCompare(b.name))
+})
+
+// legacy 内联法术按固定环位筛选后的行（v2 走服务端 level 参数）
+const filteredLegacySpells = computed(() => {
+  const rows = sortedSpells.value
+  if (spellsLevel.value === null) return rows
+  return rows.filter((sp: any) => Number(sp?.level) === spellsLevel.value)
 })
 
 function fmtMod(n: number): string {
@@ -1189,7 +1202,7 @@ async function loadSpells(page = spellsPage.value) {
   if (mode.value !== 'v2' || !currentId.value) return
   spellsLoading.value = true
   try {
-    const data = await backendFetchSpells(currentId.value, page, spellsPerPage.value, spellsSearch.value)
+    const data = await backendFetchSpells(currentId.value, page, spellsPerPage.value, spellsSearch.value, spellsLevel.value)
     if (data) {
       serverSpells.value = data.items || []
       spellsTotal.value = Number(data.total) || 0
@@ -1205,6 +1218,14 @@ function resetSpells() {
   spellsTotal.value = 0
   spellsPage.value = 1
 }
+function onSpellLevel(lv: number | null) {
+  spellsLevel.value = lv
+  if (mode.value === 'v2') {
+    spellsPage.value = 1
+    loadSpells(1)
+  }
+  // legacy 分支由 filteredLegacySpells computed 直接生效
+}
 function onSpellSearch() {
   spellsPage.value = 1
   loadSpells(1)
@@ -1213,7 +1234,7 @@ function onSpellPage(p: number) {
   loadSpells(p)
 }
 function addSpellV2() {
-  spellEditTarget.value = { id: '', status: '已准备', level: 0, school: '', ritual: false, name: '', castingTime: '', range: '', duration: '', v: false, s: false, m: false, material: '', effect: '' } as unknown as Spell
+  spellEditTarget.value = { id: '', status: '已准备', level: spellsLevel.value ?? 0, school: '', ritual: false, name: '', castingTime: '', range: '', duration: '', v: false, s: false, m: false, material: '', effect: '' } as unknown as Spell
   spellIsNew.value = true
   spellEditDialog.value = true
 }
@@ -1900,6 +1921,27 @@ onMounted(() => {
 .cm-spell-form .el-input {
   flex: 1;
   min-width: 120px;
+}
+.cm-spell-levels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 4px 0 8px;
+}
+.cm-spell-levels button {
+  border: 1px solid #d1d5db;
+  background: #fff;
+  border-radius: 6px;
+  padding: 2px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  color: #374151;
+}
+.cm-spell-levels button.on {
+  background: #eef2ff;
+  border-color: #6366f1;
+  color: #4f46e5;
+  font-weight: 600;
 }
 .cm-spell-toolbar {
   display: flex;
