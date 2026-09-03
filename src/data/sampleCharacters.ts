@@ -304,11 +304,14 @@ function buildWizard11(): CharacterCard {
   return c
 }
 
+// 示例角色使用“稳定 id”：多次调用结果一致，便于前端去重（否则每次随机 id 会无限重复添加）
+export const SAMPLE_IDS = { barbarian: 'sample-barbarian', wizard: 'sample-mage' } as const
+
 export function createSampleCharacters(): CharacterCard[] {
   const barb = buildBarbarian11()
   const wiz = buildWizard11()
-  barb.id = uid()
-  wiz.id = uid()
+  barb.id = SAMPLE_IDS.barbarian
+  wiz.id = SAMPLE_IDS.wizard
   return [barb, wiz]
 }
 

@@ -1434,7 +1434,7 @@ function maybeSeedSamples() {
   }
 }
 
-// 手动随机添加一个示例角色
+// 添加示例角色：一次补全所有缺失的示例（稳定 id 去重，不会重复添加）
 function addSampleCharacters() {
   const existing = new Set(cards.value.map((c) => c.id))
   const candidates = createSampleCharacters().filter((s) => !existing.has(s.id))
@@ -1442,11 +1442,12 @@ function addSampleCharacters() {
     ElMessage.info('示例角色已在库中')
     return
   }
-  const pick = candidates[Math.floor(Math.random() * candidates.length)]
-  markCardFull(pick.id)
-  cards.value.push(pick)
-  currentId.value = pick.id
-  ElMessage.success(`已添加示例角色：${pick.className} ${pick.level}级`)
+  candidates.forEach((pick) => {
+    markCardFull(pick.id)
+    cards.value.push(pick)
+  })
+  currentId.value = candidates[0].id
+  ElMessage.success(`已添加 ${candidates.length} 个示例角色：${candidates.map((c) => `${c.className} ${c.level}级`).join('、')}`)
 }
 
 watch(cards, (nv) => scheduleSync(nv), { deep: true })
