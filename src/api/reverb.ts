@@ -11,6 +11,7 @@
 import Echo from 'laravel-echo'
 import Pusher from 'pusher-js'
 import { getBackendBase, userId } from './characterBackend'
+import { logWs, summarize } from './wsLog'
 
 // ---------- Reverb 连接参数（可经 VITE_REVERB_* 覆盖；无 env 时兜底线上） ----------
 const REVERB_KEY = (import.meta.env.VITE_REVERB_APP_KEY as string) || '163b438a069828cd1dd3dc585a607eab'
@@ -33,6 +34,16 @@ export function initEcho(): void {
       authEndpoint: `${getBackendBase()}/broadcasting/auth`,
       auth: { headers: { 'X-Dnd-User': userId() } },
     })
+    // 连接状态上报（供页面调试长连接）
+    try {
+      const conn: any = (window as any).Echo?.connector?.pusher?.connection
+      if (conn) {
+        conn.bind('state_change', (st: any) => logWs('sys', 'echo', 'WS状态', `${st?.previous} → ${st?.current}`))
+        conn.bind('error', (e: any) => logWs('err', 'echo', 'WS错误', summarize(e)))
+      }
+    } catch (e) {
+      /* 忽略 */
+    }
   } catch (e) {
     console.error('initEcho 失败，走本地模式', e)
     ;(window as any).Echo = null
@@ -67,27 +78,41 @@ export function connectReverb(sessionId: string, handlers: ReverbHandlers): any 
     handlers.onOnline?.(false)
     return null
   }
+  const chanName = 'presence-combat.' + sessionId
+  const logIn = (ev: string) => (e: any) => {
+    logWs('in', chanName, '.' + ev, summarize(e?.data ?? e))
+  }
   try {
+    logWs('sys', chanName, '加入频道', `ws://${REVERB_HOST}:${REVERB_PORT}/app/…`)
     const ch = echo.join('combat.' + sessionId) // -> presence-combat.{sessionId}
-    ch.listen('.CombatSessionState', (e: any) => handlers.onSessionState?.(e?.data ?? e))
-    ch.listen('.CombatantAdded', (e: any) => handlers.onCombatantAdded?.((e?.data ?? e)?.combatant))
-    ch.listen('.CombatantUpdated', (e: any) => handlers.onCombatantUpdated?.((e?.data ?? e)?.combatant))
-    ch.listen('.CombatantRemoved', (e: any) => handlers.onCombatantRemoved?.((e?.data ?? e)?.combatant_id))
-    ch.listen('.InitiativeRolled', (e: any) => handlers.onInitiativeRolled?.((e?.data ?? e)?.order))
+    ch.listen('.CombatSessionState', (e: any) => { logIn('CombatSessionState')(e); handlers.onSessionState?.(e?.data ?? e) })
+    ch.listen('.CombatantAdded', (e: any) => { logIn('CombatantAdded')(e); handlers.onCombatantAdded?.((e?.data ?? e)?.combatant) })
+    ch.listen('.CombatantUpdated', (e: any) => { logIn('CombatantUpdated')(e); handlers.onCombatantUpdated?.((e?.data ?? e)?.combatant) })
+    ch.listen('.CombatantRemoved', (e: any) => { logIn('CombatantRemoved')(e); handlers.onCombatantRemoved?.((e?.data ?? e)?.combatant_id) })
+    ch.listen('.InitiativeRolled', (e: any) => { logIn('InitiativeRolled')(e); handlers.onInitiativeRolled?.((e?.data ?? e)?.order) })
     ch.listen('.CombatantSwapped', (e: any) => {
+      logIn('CombatantSwapped')(e)
       const d = e?.data ?? e
       handlers.onCombatantSwapped?.(d?.a_id, d?.b_id)
     })
-    ch.listen('.SpellAreaUpdated', (e: any) => handlers.onSpellAreaUpdated?.((e?.data ?? e)?.spell_area))
+    ch.listen('.SpellAreaUpdated', (e: any) => { logIn('SpellAreaUpdated')(e); handlers.onSpellAreaUpdated?.((e?.data ?? e)?.spell_area) })
     ch.listen('.TurnChanged', (e: any) => {
+      logIn('TurnChanged')(e)
       const d = e?.data ?? e
       handlers.onTurnChanged?.(d?.current_combatant_id, d?.round)
     })
-    ch.listen('.SessionLocked', (e: any) => handlers.onSessionLocked?.((e?.data ?? e)?.locked))
-    ch.here(() => handlers.onOnline?.(true))
-    ch.error?.(() => handlers.onOnline?.(false))
+    ch.listen('.SessionLocked', (e: any) => { logIn('SessionLocked')(e); handlers.onSessionLocked?.((e?.data ?? e)?.locked) })
+    ch.here(() => {
+      logWs('sys', chanName, '订阅成功（在线成员）')
+      handlers.onOnline?.(true)
+    })
+    ch.error?.(() => {
+      logWs('err', chanName, '订阅失败')
+      handlers.onOnline?.(false)
+    })
     return ch
   } catch (e) {
+    logWs('err', chanName, '订阅异常', summarize(e))
     console.error('订阅战斗频道失败', e)
     handlers.onOnline?.(false)
     return null
@@ -125,20 +150,30 @@ export function connectCharacterCards(handlers: CharacterCardHandlers): boolean 
   try {
     if (!cardsChannel) {
       cardsChannel = echo.join('characters') // -> presence-characters
+      logWs('sys', 'presence-characters', '加入频道')
       cardsChannel.listen('.CharacterCardUpdated', (e: any) => {
         const d = e?.data ?? e
+        logWs('in', 'presence-characters', '.CharacterCardUpdated', summarize(d))
         handlers.onCardUpdated?.(d?.id, d?.block, d?.data ?? {})
       })
       cardsChannel.listen('.CharacterCardRemoved', (e: any) => {
         const d = e?.data ?? e
+        logWs('in', 'presence-characters', '.CharacterCardRemoved', summarize(d))
         handlers.onCardRemoved?.(d?.id)
       })
       cardsChannel.listen('.SpellUpdated', (e: any) => {
         const d = e?.data ?? e
+        logWs('in', 'presence-characters', '.SpellUpdated', summarize(d))
         handlers.onSpellUpdated?.(d?.card_id, d?.spell)
       })
-      cardsChannel.here(() => handlers.onOnline?.(true))
-      cardsChannel.error?.(() => handlers.onOnline?.(false))
+      cardsChannel.here(() => {
+        logWs('sys', 'presence-characters', '订阅成功（在线成员）')
+        handlers.onOnline?.(true)
+      })
+      cardsChannel.error?.(() => {
+        logWs('err', 'presence-characters', '订阅失败')
+        handlers.onOnline?.(false)
+      })
     }
     return true
   } catch (e) {

@@ -11,6 +11,7 @@
 
 import { ref } from 'vue'
 import type { CharacterCard } from '../data/dndModel'
+import { logWs } from './wsLog'
 
 const BASE_KEY = 'dnd-backend-base'
 const DEFAULT_BASE = (import.meta.env.VITE_API_BASE as string) || '/api'
@@ -214,22 +215,27 @@ export function userId(): string {
 }
 
 // 统一请求：返回 {ok:...} JSON；网络失败返回 null
+// 同步链路观测：所有经此发出的请求都会进 wsLog（地图下方“长连接收发日志”）
 export async function apiJson(method: string, path: string, body?: any): Promise<any | null> {
+  const httpPath = `${baseUrl()}${path}`
   try {
-    const res = await fetch(`${baseUrl()}${path}`, {
+    const res = await fetch(httpPath, {
       method,
       headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-Dnd-User': userId() },
       body: body === undefined ? undefined : JSON.stringify(body),
     })
     const text = await res.text()
+    let j: any
     try {
-      const j = text ? JSON.parse(text) : { ok: res.ok }
+      j = text ? JSON.parse(text) : { ok: res.ok }
       if (j && typeof j === 'object') j.httpStatus = res.status
-      return j
     } catch (e) {
-      return { ok: false, error: 'HTTP ' + res.status + ': ' + text.slice(0, 200), httpStatus: res.status }
+      j = { ok: false, error: 'HTTP ' + res.status + ': ' + text.slice(0, 200), httpStatus: res.status }
     }
+    logWs('out', method + ' ' + path, j && j.ok === true ? 'ok' : j && j.error ? '失败' : 'HTTP ' + res.status, j?.error || '')
+    return j
   } catch (e) {
+    logWs('err', method + ' ' + path, '网络失败', String((e as any)?.message || e))
     console.error(`api ${method} ${path} 失败`, e)
     return null
   }

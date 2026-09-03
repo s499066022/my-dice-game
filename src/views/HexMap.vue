@@ -111,12 +111,16 @@
         </template>
       </div>
     </div>
+
+    <!-- 长连接收发日志：地图下方实时观测同步（收广播/发 REST/WS 状态） -->
+    <ReverbLogPanel />
   </div>
 </template>
 
 <script lang="ts" setup>
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 import CombatSessionPanel from '../components/CombatSessionPanel.vue'
+import ReverbLogPanel from '../components/ReverbLogPanel.vue'
 import { useCombatSession } from '../composables/useCombatSession'
 
 // ========== 配置 ==========
