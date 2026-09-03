@@ -133,6 +133,36 @@ export function leaveReverb(sessionId: string): void {
   }
 }
 
+// ========== 团实时（presence-parties；后端 PartiesChanged 全量广播） ==========
+type PartiesHandler = (list: any[]) => void
+let partiesChannel: any = null
+const partiesHandlers = new Set<PartiesHandler>()
+
+// 订阅团频道（多页面可重复注册回调；底层只 join 一次）
+export function onPartiesLive(cb: PartiesHandler): () => void {
+  partiesHandlers.add(cb)
+  const echo: any = (window as any).Echo
+  if (!echo || !echo.join) return () => partiesHandlers.delete(cb)
+  if (!partiesChannel) {
+    try {
+      logWs('sys', 'presence-parties', '加入频道')
+      partiesChannel = echo.join('parties')
+      partiesChannel.listen('.PartiesChanged', (e: any) => {
+        const d = e?.data ?? e
+        const list = d?.parties
+        logWs('in', 'presence-parties', '.PartiesChanged', Array.isArray(list) ? `${list.length} 个团` : summarize(d))
+        if (Array.isArray(list)) partiesHandlers.forEach((h) => { try { h(list) } catch { /* 忽略 */ } })
+      })
+      partiesChannel.here(() => logWs('sys', 'presence-parties', '订阅成功（在线成员）'))
+      partiesChannel.error?.(() => logWs('err', 'presence-parties', '订阅失败'))
+    } catch (e) {
+      logWs('err', 'presence-parties', '订阅异常', summarize(e))
+      partiesChannel = null
+    }
+  }
+  return () => partiesHandlers.delete(cb)
+}
+
 // ========== 角色卡实时（presence-characters，API.md §2.2/§7） ==========
 export interface CharacterCardHandlers {
   onCardUpdated?: (id: string, block: string, data: any) => void

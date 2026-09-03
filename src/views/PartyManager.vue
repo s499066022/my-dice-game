@@ -97,6 +97,7 @@ import {
   findPartyByMember,
 } from '../data/partyModel'
 import { backendPing, backendFetchParties, backendPublishParties } from '../api/characterBackend'
+import { onPartiesLive } from '../api/reverb'
 
 const CARDS_KEY = 'dnd-character-cards'
 
@@ -137,8 +138,15 @@ function loadCards() {
 
 let publishTimer: ReturnType<typeof setTimeout> | null = null
 let pulling = false
+let suppressPublish = false // 远端覆盖/初始载入时抑制“再发布”回环
+let addBusy = false // 连点保护：新增团 400ms 内只建一个
 
 function persist() {
+  if (suppressPublish) {
+    suppressPublish = false
+    saveParties(parties.value) // 只落本地，不再回发（防 echo 回环）
+    return
+  }
   saveParties(parties.value)
   // 防抖自动发布到后端（团 = 会话 id，多设备共享必须上传）
   if (publishTimer) clearTimeout(publishTimer)
@@ -148,6 +156,23 @@ function persist() {
   }, 500)
 }
 
+// 用远端/实时数据替换本地列表（保留当前选中），并抑制回发
+function applyRemote(list: any[]) {
+  suppressPublish = true
+  const sel = currentPartyId.value
+  parties.value = list.map((r: any) => ({
+    id: String(r.id),
+    name: r.name || '团',
+    memberIds: (Array.isArray(r.member_ids) ? r.member_ids : Array.isArray(r.memberIds) ? r.memberIds : []).map(String),
+    createdAt: r.created_at || r.createdAt || '',
+    updatedAt: r.updated_at || r.updatedAt || '',
+  }))
+  if (sel && parties.value.some((p2) => p2.id === sel)) currentPartyId.value = sel
+  else currentPartyId.value = parties.value[0]?.id ?? ''
+  saveParties(parties.value)
+}
+
+
 // 周期从后端拉取（设备1/设备2 共用同一后端时，他端新建/改团这里会自动出现）
 async function pullFromBackend() {
   if (pulling) return
@@ -156,13 +181,8 @@ async function pullFromBackend() {
     const online = await backendPing()
     if (!online) return
     const remote = await backendFetchParties()
-    if (remote && Array.isArray(remote) && remote.length) {
-      const sel = currentPartyId.value
-      parties.value = remote.map((r: any) => ({ id: String(r.id), name: r.name || '团', memberIds: (Array.isArray(r.member_ids) ? r.member_ids : Array.isArray(r.memberIds) ? r.memberIds : []).map(String), createdAt: r.created_at || '', updatedAt: r.updated_at || '' }))
-      if (sel && parties.value.some((p2) => p2.id === sel)) currentPartyId.value = sel
-      else currentPartyId.value = parties.value[0]?.id ?? ''
-      saveParties(parties.value)
-    } else if (parties.value.length) {
+    if (remote && Array.isArray(remote) && remote.length) applyRemote(remote)
+    else if (parties.value.length) {
       await backendPublishParties(JSON.parse(JSON.stringify(parties.value)))
     }
   } finally {
@@ -171,6 +191,10 @@ async function pullFromBackend() {
 }
 
 function addParty() {
+  // 连点/双击保护：400ms 内只允许新建一个团
+  if (addBusy) return
+  addBusy = true
+  setTimeout(() => (addBusy = false), 400)
   const p = createParty(`团 ${parties.value.length + 1}`)
   parties.value.push(p)
   currentPartyId.value = p.id
@@ -213,10 +237,16 @@ watch(parties, persist, { deep: true })
 
 function onMountedInit() {
   loadCards()
+  suppressPublish = true
   parties.value = loadParties()
   currentPartyId.value = parties.value[0]?.id ?? ''
+  suppressPublish = false
   syncFromBackend()
-  // 每 30s 拉一次后端团数据（多设备协作）
+  // 实时频道（团页单独会话 presence-parties）
+  onPartiesLive((list) => {
+    if (Array.isArray(list)) applyRemote(list)
+  })
+  // 每 30s 兜底拉一次（离线/未连 WS 时仍能同步）
   setInterval(() => pullFromBackend(), 30000)
 }
 
@@ -225,11 +255,8 @@ async function syncFromBackend() {
   const online = await backendPing()
   if (!online) return
   const remote = await backendFetchParties()
-  if (remote && remote.length) {
-    parties.value = remote
-    currentPartyId.value = parties.value[0]?.id ?? ''
-    saveParties(parties.value)
-  } else if (parties.value.length) {
+  if (remote && remote.length) applyRemote(remote)
+  else if (parties.value.length) {
     backendPublishParties(JSON.parse(JSON.stringify(parties.value)))
   }
 }

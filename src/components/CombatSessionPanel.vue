@@ -97,6 +97,7 @@ import { useCombatSession, type Combatant } from '../composables/useCombatSessio
 import { loadParties, type Party } from '../data/partyModel'
 import { normalizeCharacterCard, type CharacterCard } from '../data/dndModel'
 import { backendFetchParties, backendFetchAll, backendFetchLightCharacters } from '../api/characterBackend'
+import { onPartiesLive } from '../api/reverb'
 
 const SIZE = [
   { label: '微型', val: 0.5 }, { label: '小型', val: 1 }, { label: '中型', val: 1 },
@@ -291,7 +292,23 @@ onMounted(async () => {
     selectedParty.value = last
     await onPartySelect(last)
   }
-  // 每 20s 从后端拉一次团列表（多设备：他端新建/改团，这里自动出现）
+  // 团实时频道：他端新建/改团立刻更新（后端 PartiesChanged 全量广播）
+  onPartiesLive((list) => {
+    if (!Array.isArray(list)) return
+    const sel = selectedParty.value
+    parties.value = list.map(toParty)
+    if (sel && !parties.value.some((p) => p.id === sel)) {
+      // 所选团被他端删除则回到“未选择团”
+      selectedParty.value = ''
+      partyCards.value = []
+    }
+    if (selectedParty.value) {
+      ensureCardPool()
+        .then(() => loadCardsForParty(selectedParty.value))
+        .catch(() => {})
+    }
+  })
+  // 每 20s 兜底拉一次（离线/未连 WS 时仍能同步）
   setInterval(() => {
     loadPartyCards().catch(() => {})
   }, 20000)
