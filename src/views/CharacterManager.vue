@@ -42,18 +42,37 @@
         </template>
       </el-dialog>
 
-      <!-- 法术材料 / 效果 编辑 -->
-      <el-dialog v-model="spellEditDialog" :title="'法术材料 / 效果 — ' + (spellEditTarget?.name || '法术')" width="560px">
-        <div v-if="spellEditTarget" class="cm-spell-field">
-          <label>具体施法材料</label>
-          <el-input v-model="spellEditTarget.material" type="textarea" :rows="3" placeholder="具体施法材料…" />
-        </div>
-        <div v-if="spellEditTarget" class="cm-spell-field">
-          <label>法术效果</label>
-          <el-input v-model="spellEditTarget.effect" type="textarea" :rows="6" placeholder="法术效果…" />
-        </div>
+      <!-- 法术 编辑（新增/修改；v2 走单条接口，legacy 直接改卡内对象） -->
+      <el-dialog v-model="spellEditDialog" :title="(spellIsNew ? '添加法术' : '法术详情') + ' — ' + (spellEditTarget?.name || '未命名')" width="640px">
+        <template v-if="spellEditTarget">
+          <div class="cm-spell-form">
+            <el-input v-model="spellEditTarget.name" placeholder="法术名" />
+            <el-input-number v-model="spellEditTarget.level" :min="0" :max="9" placeholder="环位" />
+            <el-select v-model="spellEditTarget.status" style="width: 110px">
+              <el-option v-for="st in SPELL_STATUSES" :key="st" :value="st" :label="st" />
+            </el-select>
+          </div>
+          <div class="cm-spell-form">
+            <el-input v-model="spellEditTarget.school" placeholder="学派" />
+            <el-checkbox v-model="spellEditTarget.ritual">仪式</el-checkbox>
+          </div>
+          <div class="cm-spell-form">
+            <el-input v-model="spellEditTarget.castingTime" placeholder="施法时间" />
+            <el-input v-model="spellEditTarget.range" placeholder="施法距离" />
+            <el-input v-model="spellEditTarget.duration" placeholder="持续时间" />
+          </div>
+          <div class="cm-spell-form">
+            <el-checkbox v-model="spellEditTarget.v">语言 V</el-checkbox>
+            <el-checkbox v-model="spellEditTarget.s">姿势 S</el-checkbox>
+            <el-checkbox v-model="spellEditTarget.m">材料 M</el-checkbox>
+          </div>
+          <div class="cm-spell-field"><label>具体施法材料</label><el-input v-model="spellEditTarget.material" type="textarea" :rows="2" placeholder="具体施法材料…" /></div>
+          <div class="cm-spell-field"><label>法术效果</label><el-input v-model="spellEditTarget.effect" type="textarea" :rows="5" placeholder="法术效果…" /></div>
+        </template>
         <template #footer>
-          <el-button type="primary" @click="spellEditDialog = false">完成</el-button>
+          <el-button @click="spellEditDialog = false; spellIsNew = false">取消</el-button>
+          <el-button v-if="mode === 'v2'" type="primary" @click="saveSpellEdit">保存</el-button>
+          <el-button v-else type="primary" @click="spellEditDialog = false; spellIsNew = false">完成</el-button>
         </template>
       </el-dialog>
     </div>
@@ -430,50 +449,78 @@
                 </table>
               </div>
               <div class="cm-panel cm-panel-wide">
-                <h4>法术列表（按环位 0-9 排列）</h4>
-                <div class="cm-table-wrap">
-                  <table class="cm-table">
-                    <thead>
-                      <tr>
-                        <th>状态</th>
-                        <th>LV</th>
-                        <th>学派</th>
-                        <th>仪式</th>
-                        <th>法术名</th>
-                        <th>施法时间</th>
-                        <th>施法距离</th>
-                        <th>持续时间</th>
-                        <th>V</th>
-                        <th>S</th>
-                        <th>M</th>
-                        <th>材料 / 效果</th>
-                        <th></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr v-for="sp in sortedSpells" :key="sp.id">
-                        <td>
-                          <el-select v-model="sp.status" size="small" style="width: 84px">
-                            <el-option v-for="st in SPELL_STATUSES" :key="st" :value="st" :label="st" />
-                          </el-select>
-                        </td>
-                        <td class="cm-num"><el-input-number v-model="sp.level" :min="0" :max="9" size="small" controls-position="right" /></td>
-                        <td><el-input v-model="sp.school" size="small" style="width: 64px" /></td>
-                        <td class="cm-vsm"><el-checkbox v-model="sp.ritual" /></td>
-                        <td><el-input v-model="sp.name" size="small" /></td>
-                        <td><el-input v-model="sp.castingTime" size="small" style="width: 92px" /></td>
-                        <td><el-input v-model="sp.range" size="small" style="width: 92px" /></td>
-                        <td><el-input v-model="sp.duration" size="small" style="width: 92px" /></td>
-                        <td class="cm-vsm"><el-checkbox v-model="sp.v" /></td>
-                        <td class="cm-vsm"><el-checkbox v-model="sp.s" /></td>
-                        <td class="cm-vsm"><el-checkbox v-model="sp.m" /></td>
-                        <td><el-button size="small" text @click="openSpellDialog(sp)">📝 查看 / 编辑</el-button></td>
-                        <td><el-button size="small" type="danger" text @click="removeSpell(sp)">删</el-button></td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-                <el-button size="small" @click="addSpell">＋ 添加法术</el-button>
+                <h4>法术列表（按环位排列）</h4>
+                <!-- v2：服务端分页 -->
+                <template v-if="mode === 'v2'">
+                  <div class="cm-spell-toolbar">
+                    <el-input v-model="spellsSearch" size="small" placeholder="搜索法术名/学派/效果…" clearable style="width: 240px" @change="onSpellSearch" @clear="onSpellSearch" />
+                    <el-button size="small" type="primary" @click="addSpellV2">＋ 添加法术</el-button>
+                  </div>
+                  <div class="cm-table-wrap">
+                    <table class="cm-table">
+                      <thead>
+                        <tr>
+                          <th>状态</th><th>LV</th><th>学派</th><th>仪式</th><th>法术名</th><th>施法时间</th><th>施法距离</th><th>持续时间</th><th>V</th><th>S</th><th>M</th><th></th><th></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr v-for="sp in serverSpells" :key="sp.id">
+                          <td class="cm-sp">{{ sp.status }}</td>
+                          <td class="cm-num cm-sp">{{ sp.level }}</td>
+                          <td class="cm-sp">{{ sp.school }}</td>
+                          <td class="cm-vsm cm-sp">{{ sp.ritual ? '✓' : '' }}</td>
+                          <td class="cm-sp">{{ sp.name }}</td>
+                          <td class="cm-sp">{{ sp.castingTime }}</td>
+                          <td class="cm-sp">{{ sp.range }}</td>
+                          <td class="cm-sp">{{ sp.duration }}</td>
+                          <td class="cm-vsm cm-sp">{{ sp.v ? '✓' : '' }}</td>
+                          <td class="cm-vsm cm-sp">{{ sp.s ? '✓' : '' }}</td>
+                          <td class="cm-vsm cm-sp">{{ sp.m ? '✓' : '' }}</td>
+                          <td><el-button size="small" text @click="openSpellDialog(sp)">📝 查看/编辑</el-button></td>
+                          <td><el-button size="small" type="danger" text @click="removeSpellV2(sp)">删</el-button></td>
+                        </tr>
+                        <tr v-if="!serverSpells.length && !spellsLoading"><td colspan="13" class="cm-eq-empty">暂无法术</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <div class="cm-pager">
+                    <el-pagination background layout="prev, pager, next, total" :total="spellsTotal" :page-size="spellsPerPage" :current-page="spellsPage" @current-change="onSpellPage" />
+                  </div>
+                </template>
+                <!-- legacy：卡内整表 -->
+                <template v-else>
+                  <div class="cm-table-wrap">
+                    <table class="cm-table">
+                      <thead>
+                        <tr>
+                          <th>状态</th><th>LV</th><th>学派</th><th>仪式</th><th>法术名</th><th>施法时间</th><th>施法距离</th><th>持续时间</th><th>V</th><th>S</th><th>M</th><th>材料 / 效果</th><th></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr v-for="sp in sortedSpells" :key="sp.id">
+                          <td>
+                            <el-select v-model="sp.status" size="small" style="width: 84px">
+                              <el-option v-for="st in SPELL_STATUSES" :key="st" :value="st" :label="st" />
+                            </el-select>
+                          </td>
+                          <td class="cm-num"><el-input-number v-model="sp.level" :min="0" :max="9" size="small" controls-position="right" /></td>
+                          <td><el-input v-model="sp.school" size="small" style="width: 64px" /></td>
+                          <td class="cm-vsm"><el-checkbox v-model="sp.ritual" /></td>
+                          <td><el-input v-model="sp.name" size="small" /></td>
+                          <td><el-input v-model="sp.castingTime" size="small" style="width: 92px" /></td>
+                          <td><el-input v-model="sp.range" size="small" style="width: 92px" /></td>
+                          <td><el-input v-model="sp.duration" size="small" style="width: 92px" /></td>
+                          <td class="cm-vsm"><el-checkbox v-model="sp.v" /></td>
+                          <td class="cm-vsm"><el-checkbox v-model="sp.s" /></td>
+                          <td class="cm-vsm"><el-checkbox v-model="sp.m" /></td>
+                          <td><el-button size="small" text @click="openSpellDialog(sp)">📝 查看 / 编辑</el-button></td>
+                          <td><el-button size="small" type="danger" text @click="removeSpell(sp)">删</el-button></td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <el-button size="small" @click="addSpell">＋ 添加法术</el-button>
+                </template>
               </div>
             </div>
           </el-tab-pane>
@@ -539,11 +586,19 @@ import {
   backendPing,
   backendFetchAll,
   backendReplaceAll,
-  backendPatchCard,
+  backendFetchLightCharacters,
+  backendFetchCardBlock,
+  backendPatchCardBlock,
+  backendFetchSpells,
+  backendCreateSpell,
+  backendPatchSpell,
+  backendDeleteSpell,
   getBackendBase,
   setBackendBase,
   useBackendStatus,
 } from '../api/characterBackend'
+import { connectCharacterCards } from '../api/reverb'
+import { CARD_BLOCKS, BLOCK_OF_KEY, pickBlock, type CardBlock } from '../data/cardBlocks'
 
 const STORAGE_KEY = 'dnd-character-cards'
 const CURRENT_KEY = 'dnd-character-cards-current'
@@ -556,7 +611,7 @@ const SPELL_STATUSES = ['未准备', '已准备', '已知', '常备', '专注']
 
 const cards = ref<CharacterCard[]>([])
 const currentId = ref('')
-const activeTab = ref('basic')
+const activeTab = ref('combat')
 const fileInput = ref<HTMLInputElement | null>(null)
 const backendStatus = useBackendStatus()
 const backendUrlInput = ref(getBackendBase())
@@ -565,6 +620,18 @@ const weaponLibrary = ref<WeaponPreset[]>([])
 const manageDialog = ref(false)
 const spellEditDialog = ref(false)
 const spellEditTarget = ref<Spell | null>(null)
+
+// ---- 角色卡 v2：轻量列表 / 分块懒加载 / 法术分页 / 实时 ----
+const mode = ref<'v2' | 'legacy'>('legacy')
+type BlockSet = Set<CardBlock>
+const blockLoaded = new Map<string, BlockSet>() // cardId -> 已加载块
+const spellsSearch = ref('')
+const spellsPage = ref(1)
+const spellsPerPage = ref(20)
+const spellsTotal = ref(0)
+const serverSpells = ref<any[]>([])
+const spellsLoading = ref(false)
+const spellIsNew = ref(false)
 
 const allPresetWeapons = computed(() => weaponLibrary.value)
 
@@ -646,6 +713,7 @@ const statusLabel = computed(() => {
 function addCard() {
   const card = createEmptyCard(`新角色 ${cards.value.length + 1}`)
   card.id = uid()
+  markCardFull(card.id)
   cards.value.push(card)
   currentId.value = card.id
 }
@@ -658,6 +726,7 @@ function duplicateCard(card: CharacterCard) {
     createdAt: new Date().toISOString(),
   })
   if (!copy) return
+  markCardFull(copy.id)
   cards.value.push(copy)
   currentId.value = copy.id
   ElMessage.success('已复制角色卡')
@@ -829,6 +898,7 @@ function removeSpell(s: any) {
 
 function openSpellDialog(sp: Spell) {
   spellEditTarget.value = sp
+  spellIsNew.value = false
   spellEditDialog.value = true
 }
 
@@ -874,6 +944,7 @@ async function onImportFile(e: Event) {
       ElMessage.warning('未识别到有效的角色卡数据')
       return
     }
+    added.forEach((c) => markCardFull(c.id))
     cards.value.push(...added)
     currentId.value = added[0].id
     ElMessage.success(`已导入 ${added.length} 张角色卡`)
@@ -904,30 +975,16 @@ function localSave() {
   localStorage.setItem(CURRENT_KEY, currentId.value)
 }
 
-// ========== 后端同步 ==========
-// 分块设计：每张卡的"编辑选项卡"对应一组顶层字段，编辑时只同步变更的块（减小单次数据量）。
-// 后端需支持 PATCH /characters/{id}（顶层字段浅合并进 payload JSON）；未支持时自动回退整库覆盖。
-const CARD_BLOCKS: Record<string, string[]> = {
-  basic: ['name', 'playerName', 'race', 'background', 'alignment', 'classes', 'xp', 'proficiencyBonus', 'portraitUrl'],
-  combat: ['hp', 'tempHp', 'hitDice', 'acBonus', 'initiativeBonus', 'initiativeAdvantage', 'speed', 'size', 'resistances', 'immunities', 'passivePerception', 'conditions', 'resources'],
-  skills: ['skills', 'weaponsProficient', 'armorProficient', 'languages', 'tools'],
-  equipment: ['weapons', 'equipment', 'armor', 'shield'],
-  features: ['classFeatures', 'racialFeatures', 'feats', 'specialAbilities'],
-  spells: ['spellAbility', 'spellDc', 'spellAttackBonus', 'spellSlots', 'spells'],
-  wealth: ['money', 'weightCapacity', 'note'],
-}
-const BLOCK_OF_KEY: Record<string, string> = {}
-Object.entries(CARD_BLOCKS).forEach(([b, keys]) => keys.forEach((k) => (BLOCK_OF_KEY[k] = b)))
-
+// ========== 后端同步（v2: 分块；legacy: 整库兼容） ==========
 let syncTimer: ReturnType<typeof setTimeout> | null = null
 let hydrating = false
 // granular: 0=未探测 1=后端支持单卡分块 2=不支持(每次回退整库)
 let granular = 0
 let wholePending = false
-const pendingBlocks = new Map<string, Set<string>>()
+const pendingBlocks = new Map<string, Set<CardBlock>>()
 
-function changedBlocks(oldCard: any, newCard: any): Set<string> {
-  const set = new Set<string>()
+function changedBlocks(oldCard: any, newCard: any): Set<CardBlock> {
+  const set = new Set<CardBlock>()
   Object.keys(BLOCK_OF_KEY).forEach((key) => {
     if (JSON.stringify(oldCard?.[key]) !== JSON.stringify(newCard?.[key])) set.add(BLOCK_OF_KEY[key])
   })
@@ -971,7 +1028,7 @@ function scheduleSync(nv: CharacterCard[]) {
       if (!oldJson || oldJson === JSON.stringify(card)) return
       const blocks = changedBlocks(JSON.parse(oldJson), card)
       if (!blocks.size) return
-      const set = pendingBlocks.get(card.id) || new Set<string>()
+      const set = pendingBlocks.get(card.id) || new Set<CardBlock>()
       blocks.forEach((b) => set.add(b))
       pendingBlocks.set(card.id, set)
     })
@@ -993,7 +1050,8 @@ async function flushSync() {
   if (!pendingBlocks.size) return
   const batch = [...pendingBlocks.entries()]
   pendingBlocks.clear()
-  if (granular === 2) {
+  // legacy/不支持块端点：直接整库
+  if (granular === 2 || mode.value === 'legacy') {
     await pushToBackendWhole(true, true)
     return
   }
@@ -1002,23 +1060,20 @@ async function flushSync() {
     const card = cards.value.find((c) => c.id === id)
     if (!card) continue
     for (const b of blocks) {
-      const keys = CARD_BLOCKS[b] || []
-      const data: any = {}
-      keys.forEach((k) => {
-        if (k in card) data[k] = (card as any)[k]
-      })
-      let r = await backendPatchCard(id, data)
+      const data = pickBlock(card, b)
+      if (!Object.keys(data).length) continue
+      let r = await backendPatchCardBlock(id, b, data)
       if (r && r.ok === true) {
         granular = 1
         markSynced()
         continue
       }
-      // 失败：先整库覆盖一次（补上新建/恢复的卡），再重试一次 PATCH 判断端点是否可用
+      // 失败：先整库覆盖一次（v2 会用远端整卡打底），再重试一次判断端点是否可用
       if (!usedWholeFallback) {
         usedWholeFallback = true
         await pushToBackendWhole(true, true)
       }
-      r = await backendPatchCard(id, data)
+      r = await backendPatchCardBlock(id, b, data)
       if (r && r.ok === true) {
         granular = 1
         markSynced()
@@ -1033,7 +1088,6 @@ async function flushSync() {
 
 // 整库覆盖（按钮「整卡同步」/ 新建/导入/删除/回退路径）
 async function pushToBackendWhole(force = false, silent = false) {
-  // 非主动且当前离线时，先尝试重新探测连接
   if (backendStatus.value.status !== 'online') {
     if (!force) {
       backendStatus.value.status = 'offline'
@@ -1051,10 +1105,25 @@ async function pushToBackendWhole(force = false, silent = false) {
   }
   backendStatus.value.checking = true
   // 发送清洗后的数据（移除未填写的空职业行）
-  const toSend = cards.value.map((c) => ({
+  let toSend = cards.value.map((c) => ({
     ...c,
     classes: (c.classes || []).filter((cl) => (cl.name && cl.name.trim()) || cl.level !== 1),
   }))
+  if (mode.value === 'v2') {
+    // v2 下本地卡可能是"轻量 + 懒加载"的部分数据；整库覆盖前用远端整卡打底，避免覆盖丢失未加载块
+    try {
+      const remote = await backendFetchAll()
+      if (Array.isArray(remote) && remote.length) {
+        const byId = new Map(remote.map((r: any) => [r.id, r]))
+        toSend = toSend.map((c) => {
+          const r = byId.get(c.id)
+          return r ? { ...r, ...c } : c
+        })
+      }
+    } catch (e) {
+      /* 忽略，用本地 */
+    }
+  }
   const ok = await backendReplaceAll(toSend)
   backendStatus.value.checking = false
   if (ok) {
@@ -1064,6 +1133,152 @@ async function pushToBackendWhole(force = false, silent = false) {
     backendStatus.value.error = '写入后端失败，已保留在本地'
     if (!silent) ElMessage.error('写入后端失败，已保留在本地')
   }
+}
+
+// ---------- 角色卡 v2 工具 ----------
+const TAB_TO_BLOCK: Record<string, CardBlock> = {
+  basic: 'basic', combat: 'combat', skills: 'skills', equipment: 'equipment',
+  features: 'features', spells: 'spellconfig', wealth: 'wealth',
+}
+
+// 轻量核心 -> 完整角色卡（缺省字段用默认值补齐；仅 combat 块 + name 来自远端 light）
+function lightToCard(l: any): CharacterCard {
+  const base = createEmptyCard(l.name || '角色')
+  const card = normalizeCharacterCard({ ...base, ...l })!
+  return card
+}
+
+function mergeBlockIntoCard(card: CharacterCard, block: CardBlock, data: any) {
+  ;(CARD_BLOCKS[block] || []).forEach((k) => {
+    if (k in data) (card as any)[k] = data[k]
+  })
+}
+
+function markCardFull(id: string) {
+  blockLoaded.set(id, new Set<CardBlock>(CARD_BLOCKS_KEYS_ALL))
+}
+const CARD_BLOCKS_KEYS_ALL = Object.keys(CARD_BLOCKS) as CardBlock[]
+
+// 切选项卡时懒加载该块（v2）
+async function maybeLoadTab() {
+  if (mode.value !== 'v2') return
+  const card = cards.value.find((c) => c.id === currentId.value)
+  if (!card || backendStatus.value.status !== 'online') return
+  const block = TAB_TO_BLOCK[activeTab.value]
+  if (!block || block === 'combat') return
+  if (blockLoaded.get(card.id)?.has(block)) return
+  const data = await backendFetchCardBlock(card.id, block)
+  if (!data) return
+  mergeBlockIntoCard(card, block, data)
+  const set = blockLoaded.get(card.id) || new Set<CardBlock>()
+  set.add(block)
+  blockLoaded.set(card.id, set)
+  cardsSnap = JSON.stringify(cards.value) // 懒加载不算本地变更，避免回推
+  if (block === 'spellconfig') loadSpells(spellsPage.value)
+}
+
+// ---------- 法术（v2 分页；legacy 走卡内整表） ----------
+async function loadSpells(page = spellsPage.value) {
+  if (mode.value !== 'v2' || !currentId.value) return
+  spellsLoading.value = true
+  try {
+    const data = await backendFetchSpells(currentId.value, page, spellsPerPage.value, spellsSearch.value)
+    if (data) {
+      serverSpells.value = data.items || []
+      spellsTotal.value = Number(data.total) || 0
+      spellsPage.value = Number(data.page) || page
+    }
+  } catch (e) {
+    /* 忽略 */
+  }
+  spellsLoading.value = false
+}
+function resetSpells() {
+  serverSpells.value = []
+  spellsTotal.value = 0
+  spellsPage.value = 1
+}
+function onSpellSearch() {
+  spellsPage.value = 1
+  loadSpells(1)
+}
+function onSpellPage(p: number) {
+  loadSpells(p)
+}
+function addSpellV2() {
+  spellEditTarget.value = { id: '', status: '已准备', level: 0, school: '', ritual: false, name: '', castingTime: '', range: '', duration: '', v: false, s: false, m: false, material: '', effect: '' } as unknown as Spell
+  spellIsNew.value = true
+  spellEditDialog.value = true
+}
+async function saveSpellEdit() {
+  const sp = spellEditTarget.value
+  if (!sp) {
+    spellEditDialog.value = false
+    return
+  }
+  if (mode.value === 'v2' && currentId.value) {
+    if (spellIsNew.value) {
+      const r = await backendCreateSpell(currentId.value, sp)
+      if (!(r && r.ok)) {
+        if (r && r.error) ElMessage.error(r.error)
+        else ElMessage.error('添加法术失败')
+        return
+      }
+    } else if (sp.id) {
+      const r = await backendPatchSpell(sp.id, sp)
+      if (!(r && r.ok)) {
+        ElMessage.error('保存法术失败')
+        return
+      }
+    }
+    await loadSpells(spellsPage.value)
+  }
+  spellEditDialog.value = false
+  spellIsNew.value = false
+}
+async function removeSpellV2(s: any) {
+  if (!s || !s.id) return
+  try {
+    await ElMessageBox.confirm(`删除法术「${s.name || '未命名'}」？`, '删除确认', { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' })
+  } catch {
+    return
+  }
+  const r = await backendDeleteSpell(s.id)
+  if (r && r.ok) await loadSpells(spellsPage.value)
+  else ElMessage.error('删除法术失败')
+}
+
+// ---------- 角色卡实时（presence-characters） ----------
+function onCardRealtimeUpdated(id: string, block: string, data: any) {
+  const card = cards.value.find((c) => c.id === id)
+  if (!card) return
+  const b = (block && CARD_BLOCKS[block as CardBlock]) ? (block as CardBlock) : null
+  if (b) {
+    mergeBlockIntoCard(card, b, data)
+    const set = blockLoaded.get(id) || new Set<CardBlock>()
+    set.add(b)
+    blockLoaded.set(id, set)
+  } else {
+    Object.keys(data || {}).forEach((k) => {
+      ;(card as any)[k] = data[k]
+    })
+  }
+  cardsSnap = JSON.stringify(cards.value) // 避免把远端更新当成自己变更再回推
+}
+function onCardRealtimeRemoved(id: string) {
+  const i = cards.value.findIndex((c) => c.id === id)
+  if (i >= 0) cards.value.splice(i, 1)
+  if (currentId.value === id) currentId.value = cards.value[0]?.id ?? ''
+  cardsSnap = JSON.stringify(cards.value)
+}
+function watchCardsRealtime() {
+  return connectCharacterCards({
+    onCardUpdated: onCardRealtimeUpdated,
+    onCardRemoved: onCardRealtimeRemoved,
+    onSpellUpdated: (cardId, spell) => {
+      if (mode.value === 'v2' && cardId === currentId.value) loadSpells(spellsPage.value)
+    },
+  })
 }
 
 async function testConnection() {
@@ -1126,13 +1341,27 @@ async function init() {
   const ok = await backendPing()
   backendStatus.value.status = ok ? 'online' : 'offline'
   if (ok) {
-    const remote = await backendFetchAll()
-    if (remote && remote.length) {
-      cards.value = remote.map(normalizeCharacterCard).filter((c): c is NormalizedCard => c !== null)
+    const light = await backendFetchLightCharacters()
+    if (light && light.length) {
+      mode.value = 'v2'
+      cards.value = light.map(lightToCard)
+      blockLoaded.clear()
+      cards.value.forEach((c) => blockLoaded.set(c.id, new Set<CardBlock>(['combat'])))
     } else {
-      loadLocal()
+      mode.value = 'legacy'
+      granular = 2
+      const remote = await backendFetchAll()
+      if (remote && remote.length) {
+        cards.value = remote.map(normalizeCharacterCard).filter((c): c is NormalizedCard => c !== null)
+        blockLoaded.clear()
+        cards.value.forEach((c) => markCardFull(c.id))
+      } else {
+        loadLocal()
+      }
     }
   } else {
+    mode.value = 'legacy'
+    granular = 2
     loadLocal()
     backendStatus.value.error = '后端不可用，已使用本地存储'
   }
@@ -1142,6 +1371,10 @@ async function init() {
   hydrating = false
   cardsSnap = JSON.stringify(cards.value)
   localSave()
+  if (mode.value === 'v2' && backendStatus.value.status === 'online') {
+    watchCardsRealtime()
+  }
+  maybeLoadTab()
 }
 
 function loadLocal() {
@@ -1165,6 +1398,7 @@ function maybeSeedSamples() {
   if (localStorage.getItem(SAMPLE_SEED_FLAG)) return
   const sample = createRandomSampleCharacter()
   if (sample) {
+    markCardFull(sample.id)
     cards.value.push(sample)
     currentId.value = sample.id
     localStorage.setItem(SAMPLE_SEED_FLAG, '1')
@@ -1181,6 +1415,7 @@ function addSampleCharacters() {
     return
   }
   const pick = candidates[Math.floor(Math.random() * candidates.length)]
+  markCardFull(pick.id)
   cards.value.push(pick)
   currentId.value = pick.id
   ElMessage.success(`已添加示例角色：${pick.className} ${pick.level}级`)
@@ -1188,6 +1423,7 @@ function addSampleCharacters() {
 
 watch(cards, (nv) => scheduleSync(nv), { deep: true })
 watch(currentId, localSave)
+watch([activeTab, currentId], () => maybeLoadTab())
 
 onMounted(() => {
   init()
@@ -1644,5 +1880,34 @@ onMounted(() => {
   .cm-list {
     max-height: 260px;
   }
+}
+
+/* 法术（v2 分页 + 编辑弹窗） */
+.cm-spell-form {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.cm-spell-form .el-input {
+  flex: 1;
+  min-width: 120px;
+}
+.cm-spell-toolbar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.cm-pager {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+.cm-sp {
+  color: #374151;
+  text-align: center;
+  white-space: nowrap;
 }
 </style>

@@ -104,3 +104,46 @@ export function leaveReverb(sessionId: string): void {
     // 忽略
   }
 }
+
+// ========== 角色卡实时（presence-characters，API.md §2.2/§7） ==========
+export interface CharacterCardHandlers {
+  onCardUpdated?: (id: string, block: string, data: any) => void
+  onCardRemoved?: (id: string) => void
+  onSpellUpdated?: (cardId: string, spell: any) => void
+  onOnline?: (online: boolean) => void
+}
+
+let cardsChannel: any = null
+
+// 订阅 presence-characters；返回是否成功
+export function connectCharacterCards(handlers: CharacterCardHandlers): boolean {
+  const echo: any = (window as any).Echo
+  if (!echo || !echo.join) {
+    handlers.onOnline?.(false)
+    return false
+  }
+  try {
+    if (!cardsChannel) {
+      cardsChannel = echo.join('characters') // -> presence-characters
+      cardsChannel.listen('.CharacterCardUpdated', (e: any) => {
+        const d = e?.data ?? e
+        handlers.onCardUpdated?.(d?.id, d?.block, d?.data ?? {})
+      })
+      cardsChannel.listen('.CharacterCardRemoved', (e: any) => {
+        const d = e?.data ?? e
+        handlers.onCardRemoved?.(d?.id)
+      })
+      cardsChannel.listen('.SpellUpdated', (e: any) => {
+        const d = e?.data ?? e
+        handlers.onSpellUpdated?.(d?.card_id, d?.spell)
+      })
+      cardsChannel.here(() => handlers.onOnline?.(true))
+      cardsChannel.error?.(() => handlers.onOnline?.(false))
+    }
+    return true
+  } catch (e) {
+    console.error('订阅角色卡频道失败', e)
+    handlers.onOnline?.(false)
+    return false
+  }
+}

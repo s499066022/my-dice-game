@@ -96,7 +96,7 @@ import { ElMessage } from 'element-plus'
 import { useCombatSession, type Combatant } from '../composables/useCombatSession'
 import { loadParties, type Party } from '../data/partyModel'
 import { normalizeCharacterCard, type CharacterCard } from '../data/dndModel'
-import { backendFetchParties, backendFetchAll } from '../api/characterBackend'
+import { backendFetchParties, backendFetchAll, backendFetchLightCharacters } from '../api/characterBackend'
 
 const SIZE = [
   { label: '微型', val: 0.5 }, { label: '小型', val: 1 }, { label: '中型', val: 1 },
@@ -173,7 +173,8 @@ async function ensureCardPool() {
   if (missing.length && !remotePoolTried) {
     remotePoolTried = true
     try {
-      const remote = await backendFetchAll() // 后端角色卡（跨浏览器共享；仅缺卡时拉一次）
+      // 先试轻量列表（名字+战斗核心，含 AC/先攻所需字段，体积小）；旧后端无 light 再整卡
+      const remote = (await backendFetchLightCharacters()) || (await backendFetchAll())
       if (Array.isArray(remote)) {
         remote.forEach((c: any) => {
           const n = normalizeCharacterCard(c)

@@ -64,6 +64,42 @@ export async function backendPatchCard(id: string, data: any): Promise<any | nul
   return apiJson('PATCH', `/characters/${encodeURIComponent(id)}`, { data })
 }
 
+// ---------- 角色卡 v2：轻量列表 / 分块懒加载 / 法术独立分页 ----------
+export async function backendFetchLightCharacters(): Promise<any[] | null> {
+  const r = await apiJson('GET', '/characters/light')
+  if (r && r.ok === true && Array.isArray(r.data)) return r.data
+  return null
+}
+
+export async function backendFetchCardBlock(id: string, block: string): Promise<any | null> {
+  const r = await apiJson('GET', `/characters/${encodeURIComponent(id)}/blocks/${encodeURIComponent(block)}`)
+  return r && r.ok === true && r.data ? r.data : null
+}
+
+export async function backendPatchCardBlock(id: string, block: string, data: any): Promise<any | null> {
+  return apiJson('PATCH', `/characters/${encodeURIComponent(id)}/blocks/${encodeURIComponent(block)}`, { data })
+}
+
+export async function backendFetchSpells(cardId: string, page = 1, perPage = 20, q = ''): Promise<any | null> {
+  const qs = new URLSearchParams({ page: String(page), per_page: String(perPage) })
+  if (q) qs.set('q', q)
+  const r = await apiJson('GET', `/characters/${encodeURIComponent(cardId)}/spells?${qs.toString()}`)
+  return r && r.ok === true && r.data ? r.data : null
+}
+
+export async function backendCreateSpell(cardId: string, spell: any): Promise<any | null> {
+  const r = await apiJson('POST', `/characters/${encodeURIComponent(cardId)}/spells`, spell)
+  return r && r.ok === true && r.data ? r.data : null
+}
+
+export async function backendPatchSpell(id: string, data: any): Promise<any | null> {
+  return apiJson('PATCH', `/spells/${encodeURIComponent(id)}`, data)
+}
+
+export async function backendDeleteSpell(id: string): Promise<any | null> {
+  return apiJson('DELETE', `/spells/${encodeURIComponent(id)}`)
+}
+
 export async function backendReplaceAll(cards: CharacterCard[]): Promise<boolean> {
   try {
     const res = await fetch(charactersUrl('sync'), {
