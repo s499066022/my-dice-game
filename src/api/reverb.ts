@@ -37,6 +37,18 @@ export function initEcho(): void {
       authEndpoint: `${getBackendBase()}/broadcasting/auth`,
       auth: { headers: { 'X-Dnd-User': userId() } },
     })
+    // 常见问题提前提示：HTTPS 页面连明文 ws 会被浏览器拦截（Mixed Content）
+    try {
+      const pageHttps = typeof window !== 'undefined' && window.location?.protocol === 'https:'
+      if (pageHttps && REVERB_SCHEME !== 'https') {
+        logWs('err', 'echo', '配置提示', `页面是 HTTPS，但 Reverb 使用 ws://（scheme=${REVERB_SCHEME}）。浏览器会拦截混合内容，请改用 wss（VITE_REVERB_SCHEME=https + VITE_REVERB_PORT=443/80 的 TLS 反代）或 http 页面。`)
+      }
+      if (REVERB_SCHEME === 'https') {
+        logWs('sys', 'echo', '连接目标', `wss://${REVERB_HOST}:${REVERB_PORT}/app/…`)
+      }
+    } catch {
+      /* 忽略 */
+    }
     // 连接状态上报（供页面调试长连接）
     try {
       const conn: any = (window as any).Echo?.connector?.pusher?.connection
