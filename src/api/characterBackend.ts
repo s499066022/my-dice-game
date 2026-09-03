@@ -65,6 +65,10 @@ export async function backendPatchCard(id: string, data: any): Promise<any | nul
 }
 
 // ---------- 角色卡 v2：轻量列表 / 分块懒加载 / 法术独立分页 ----------
+export async function backendDeleteCard(id: string): Promise<any | null> {
+  return apiJson('DELETE', `/characters/${encodeURIComponent(id)}`)
+}
+
 export async function backendFetchLightCharacters(): Promise<any[] | null> {
   const r = await apiJson('GET', '/characters/light')
   if (r && r.ok === true && Array.isArray(r.data)) return r.data

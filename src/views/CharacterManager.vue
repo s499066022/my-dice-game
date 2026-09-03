@@ -593,6 +593,7 @@ import {
   backendCreateSpell,
   backendPatchSpell,
   backendDeleteSpell,
+  backendDeleteCard,
   getBackendBase,
   setBackendBase,
   useBackendStatus,
@@ -746,6 +747,12 @@ async function deleteCard(card: CharacterCard) {
   if (idx === -1) return
   cards.value.splice(idx, 1)
   if (currentId.value === card.id) currentId.value = cards.value[0]?.id ?? ''
+  if (mode.value === 'v2' && backendStatus.value.status === 'online') {
+    // v2：DELETE /characters/{id}（后端连带删 character_spells 并广播 CharacterCardRemoved）
+    backendDeleteCard(card.id).then((r) => {
+      if (r && r.ok !== true) ElMessage.error('后端删除失败：' + (r?.error || '未知'))
+    })
+  }
   ElMessage.success('已删除')
 }
 
