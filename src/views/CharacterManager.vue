@@ -1259,6 +1259,8 @@ async function addSpellFromLibrary(sp: any) {
       ElMessage.success(`已加入 ${copy.name}`)
       await loadSpells(spellsPage.value)
     } else {
+      // 失败也刷新一次：后端可能已保存但通知/响应异常，避免“列表其实已加、却一直报失败”
+      await loadSpells(spellsPage.value).catch(() => {})
       ElMessage.error('添加失败：' + (r?.error || '未知'))
     }
   } else {
@@ -1282,6 +1284,7 @@ async function saveSpellEdit() {
     if (spellIsNew.value) {
       const r = await backendCreateSpell(currentId.value, sp)
       if (!(r && r.ok)) {
+        await loadSpells(spellsPage.value).catch(() => {}) // 同“失败也刷新”原则
         if (r && r.error) ElMessage.error(r.error)
         else ElMessage.error('添加法术失败')
         return
@@ -1289,6 +1292,7 @@ async function saveSpellEdit() {
     } else if (sp.id) {
       const r = await backendPatchSpell(sp.id, sp)
       if (!(r && r.ok)) {
+        await loadSpells(spellsPage.value).catch(() => {})
         ElMessage.error('保存法术失败')
         return
       }
