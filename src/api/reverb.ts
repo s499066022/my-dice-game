@@ -15,7 +15,10 @@ import { logWs, summarize } from './wsLog'
 
 // ---------- Reverb 连接参数（可经 VITE_REVERB_* 覆盖；无 env 时兜底线上） ----------
 const REVERB_KEY = (import.meta.env.VITE_REVERB_APP_KEY as string) || '163b438a069828cd1dd3dc585a607eab'
-const REVERB_HOST = (import.meta.env.VITE_REVERB_HOST as string) || '106.12.131.21'
+// WS host 自适应：默认跟随页面 hostname（本地/局域网多设备都连到“后端所在主机”的 12226 反代）；
+// 需要其它地址（如线上）时用 VITE_REVERB_HOST 覆盖。
+const DEFAULT_HOST = typeof window !== 'undefined' && window.location?.hostname ? window.location.hostname : '127.0.0.1'
+const REVERB_HOST = (import.meta.env.VITE_REVERB_HOST as string) || DEFAULT_HOST
 const REVERB_PORT = Number(import.meta.env.VITE_REVERB_PORT || 12226)
 const REVERB_SCHEME = ((import.meta.env.VITE_REVERB_SCHEME as string) || 'http').toLowerCase()
 

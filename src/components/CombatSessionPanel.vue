@@ -291,6 +291,10 @@ onMounted(async () => {
     selectedParty.value = last
     await onPartySelect(last)
   }
+  // 每 20s 从后端拉一次团列表（多设备：他端新建/改团，这里自动出现）
+  setInterval(() => {
+    loadPartyCards().catch(() => {})
+  }, 20000)
 })
 </script>
 

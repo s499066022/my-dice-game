@@ -135,10 +135,39 @@ function loadCards() {
   }
 }
 
+let publishTimer: ReturnType<typeof setTimeout> | null = null
+let pulling = false
+
 function persist() {
   saveParties(parties.value)
-  // 同步到后端（若在线；离线则仅本地）
-  backendPublishParties(JSON.parse(JSON.stringify(parties.value)))
+  // 防抖自动发布到后端（团 = 会话 id，多设备共享必须上传）
+  if (publishTimer) clearTimeout(publishTimer)
+  publishTimer = setTimeout(async () => {
+    const ok = await backendPublishParties(JSON.parse(JSON.stringify(parties.value)))
+    if (!ok) console.warn('团同步到后端失败（离线？）——本地已保存，恢复联网后会自动重试')
+  }, 500)
+}
+
+// 周期从后端拉取（设备1/设备2 共用同一后端时，他端新建/改团这里会自动出现）
+async function pullFromBackend() {
+  if (pulling) return
+  pulling = true
+  try {
+    const online = await backendPing()
+    if (!online) return
+    const remote = await backendFetchParties()
+    if (remote && Array.isArray(remote) && remote.length) {
+      const sel = currentPartyId.value
+      parties.value = remote.map((r: any) => ({ id: String(r.id), name: r.name || '团', memberIds: (Array.isArray(r.member_ids) ? r.member_ids : Array.isArray(r.memberIds) ? r.memberIds : []).map(String), createdAt: r.created_at || '', updatedAt: r.updated_at || '' }))
+      if (sel && parties.value.some((p2) => p2.id === sel)) currentPartyId.value = sel
+      else currentPartyId.value = parties.value[0]?.id ?? ''
+      saveParties(parties.value)
+    } else if (parties.value.length) {
+      await backendPublishParties(JSON.parse(JSON.stringify(parties.value)))
+    }
+  } finally {
+    pulling = false
+  }
 }
 
 function addParty() {
@@ -187,6 +216,8 @@ function onMountedInit() {
   parties.value = loadParties()
   currentPartyId.value = parties.value[0]?.id ?? ''
   syncFromBackend()
+  // 每 30s 拉一次后端团数据（多设备协作）
+  setInterval(() => pullFromBackend(), 30000)
 }
 
 // 拉取后端团数据（若在线且后端有数据则替换本地，否则推送本地上去）
