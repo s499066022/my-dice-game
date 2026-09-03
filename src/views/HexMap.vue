@@ -1,23 +1,13 @@
 <template>
   <div class="hex-container">
-    <h2>🗺️ 战斗网格（Hex）</h2>
+    <h2>🗺️ 战斗地图（Hex）</h2>
     <p class="hint">
-      无限六边形地图，1 格 = 5 尺。从左上角把「团的角色」或「NPC/怪物」拖到网格上放置；
-      右上角工具可切「拖图 / 拖拽人物 / 测量 / 锥形」并管理已放置人物（改名/改大小/删除）。
+      无限六边形地图，1 格 = 5 尺。上面选择团后自动进入战斗会话，地图/先攻/HP/法术区全部走长连接实时同步；
+      右上角工具：拖图 / 移动参战者 / 测量 / 锥形 / 圆形法术区。
     </p>
 
     <!-- 战斗会话（长连接） -->
     <CombatSessionPanel />
-
-    <!-- 后端同步 -->
-    <div class="backend-bar">
-      <el-tag :type="mapTagType" size="small">{{ mapStatusText }}</el-tag>
-      <el-input v-model="mapBaseInput" size="small" placeholder="后端地址，如 http://localhost:12226/api" class="be-input" />
-      <el-button size="small" @click="testMapConn">测试连接</el-button>
-      <el-button size="small" type="success" plain @click="syncMapNow">立即同步</el-button>
-      <el-checkbox v-model="autoSync" @change="onAutoSyncChange">每 5 秒同步位置</el-checkbox>
-      <span v-if="lastSync" class="be-time">上次同步 {{ lastSync }}</span>
-    </div>
 
     <!-- 地图舞台 -->
     <div ref="stageRef" class="map-stage">
@@ -28,90 +18,15 @@
         @mouseup="onMouseUp"
         @mouseleave="onMouseLeave"
         @wheel.prevent="onWheel"
-        @contextmenu.prevent="onContextMenu"
-        @dragover.prevent="onDragOver"
-        @drop="onDrop"
         @touchstart.prevent="onTouchStart"
         @touchmove.prevent="onTouchMove"
         @touchend="onTouchEnd"
       ></canvas>
 
-      <!-- 左上角：角色来源（暂屏蔽，改用战斗会话面板添加） -->
-      <div v-if="showLibrary" class="library-panel">
-        <div class="lp-tabs">
-          <button :class="{ on: libTab === 'party' }" @click="libTab = 'party'">👥 团</button>
-          <button :class="{ on: libTab === 'npc' }" @click="libTab = 'npc'">👹 NPC/怪物</button>
-          <button :class="{ on: libTab === 'init' }" @click="libTab = 'init'">🎲 先攻</button>
-        </div>
-
-        <div v-if="libTab === 'party'" class="lp-block">
-          <el-select v-model="selectedPartyId" size="small" style="width: 100%" placeholder="选择团…">
-            <el-option v-for="p in parties" :key="p.id" :value="p.id" :label="`${p.name || '未命名团'}（${p.memberIds.length}）`" />
-          </el-select>
-          <div v-if="!partyMembers.length" class="lp-empty">该团无成员，或角色卡库为空</div>
-          <div class="lp-chips">
-            <div
-              v-for="m in partyMembers"
-              :key="m.id"
-              class="lp-chip"
-              :title="`拖我到网格上（${cardSizeLabel(m)}）`"
-              draggable="true"
-              @dragstart="onChipDrag($event, chipPayloadFromCard(m))"
-            >
-              <span class="lp-dot" :style="{ background: memberColor(m.id) }"></span>
-              <span class="lp-name">{{ m.name || '未命名' }}</span>
-              <span class="lp-sub">{{ cardSizeLabel(m) }}</span>
-            </div>
-          </div>
-        </div>
-
-        <div v-else-if="libTab === 'npc'" class="lp-block">
-          <div class="lp-create">
-            <input type="text" v-model="npcName" placeholder="名称" class="lp-input" />
-            <el-select v-model="npcType" size="small" style="width: 82px">
-              <el-option value="NPC" label="NPC" /><el-option value="怪物" label="怪物" />
-            </el-select>
-            <el-select v-model="npcSize" size="small" style="width: 92px">
-              <el-option v-for="o in SIZE_OPTIONS" :key="o.label" :value="o.val" :label="sizeLabel(o.val)" />
-            </el-select>
-            <input type="color" v-model="npcColor" class="lp-color" />
-            <button class="lp-add" title="添加" @click="addNpc">＋</button>
-          </div>
-          <div v-if="!npcs.length" class="lp-empty">还没有 NPC/怪物，填名字点 ＋ 添加</div>
-          <div class="lp-chips">
-            <div
-              v-for="n in npcs"
-              :key="n.id"
-              class="lp-chip"
-              title="拖我到网格上"
-              draggable="true"
-              @dragstart="onChipDrag($event, { name: n.name, color: n.color, diameter: n.size || 1 })"
-            >
-              <span class="lp-dot" :style="{ background: n.color }"></span>
-              <span class="lp-name">{{ n.name }}</span>
-              <span class="lp-sub">{{ n.type }} · {{ sizeLabel(n.size || 1) }}</span>
-              <button class="lp-x" title="移除" @click.stop="removeNpc(n.id)">×</button>
-            </div>
-          </div>
-        </div>
-
-        <div v-else class="lp-block">
-          <div class="lp-empty">先攻顺序（来自先攻页，仅展示）</div>
-          <div v-for="(row, idx) in initiativeRows" :key="idx" class="lp-init-row">
-            <span class="lp-init-rank">{{ idx + 1 }}</span>
-            <span class="lp-dot" :style="{ background: row.type === '敌人' ? '#ef4444' : '#3b82f6' }"></span>
-            <span class="lp-name">{{ row.name }}</span>
-            <span class="lp-sub">{{ row.type }}</span>
-            <span class="lp-init-total">{{ row.total }}</span>
-          </div>
-          <div v-if="!initiativeRows.length" class="lp-empty">先攻页暂无结果，请先掷骰</div>
-        </div>
-      </div>
-
       <!-- 左下角坐标 -->
       <div class="coord-badge">
         <span v-if="hoverPos">坐标 ({{ hoverPos.q }}, {{ hoverPos.r }})</span>
-        <span v-else>拖角色到网格放置</span>
+        <span v-else>选择团后拖拽参战者移动</span>
       </div>
 
       <!-- 右上角工具面板 -->
@@ -121,7 +36,7 @@
         <template v-if="toolsOpen">
           <div class="tp-modes">
             <button :class="{ on: tool === 'pan' }" title="拖拽地图" @click="tool = 'pan'">🖐 拖图</button>
-            <button :class="{ on: tool === 'char' }" title="拖拽人物位置" @click="tool = 'char'">🧍 拖拽人物</button>
+            <button :class="{ on: tool === 'char' }" title="拖拽人物位置" @click="tool = 'char'">🧍 移动参战者</button>
             <button :class="{ on: tool === 'measure' }" title="测量距离" @click="tool = 'measure'">📏 测量</button>
             <button :class="{ on: tool === 'cone' }" title="法术锥形" @click="tool = 'cone'">🔺 锥形</button>
             <button :class="{ on: tool === 'circle' }" title="圆形施法（范围）" @click="tool = 'circle'">🔵 圆形</button>
@@ -179,20 +94,6 @@
             </div>
           </div>
 
-          <!-- 已放置人物（含 HP/AC） -->
-          <div class="tp-list">
-            <div class="tp-list-title">已放置（{{ tokens.length }}）</div>
-            <div v-for="tok in tokens" :key="tok.id" class="tp-row tp-row-token" :class="{ on: tok.id === selectingId }" @click="selectingId = tok.id">
-              <span class="tp-dot" :style="{ background: tok.color }"></span>
-              <input type="text" v-model="tok.name" class="tp-name" @click.stop />
-              <el-select v-model="tok.diameter" size="small" style="width: 116px" @click.stop>
-                <el-option v-for="o in SIZE_OPTIONS" :key="o.label" :value="o.val" :label="sizeLabel(o.val)" />
-              </el-select>
-              <button class="tp-del" title="删除" :disabled="session.locked.value" @click.stop="removeToken(tok.id)">✕</button>
-            </div>
-            <div v-if="!tokens.length" class="tp-empty">暂无人物，从左上角拖入</div>
-          </div>
-
           <!-- 法术区域（会话，可绑定参战者） -->
           <div class="tp-list">
             <div class="tp-list-title">法术区域（锥形/圆形）{{ session.spellAreas.length }}</div>
@@ -214,50 +115,19 @@
 </template>
 
 <script lang="ts" setup>
-import { ref, computed, onMounted, onUnmounted, reactive, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ref, onMounted, onUnmounted, watch } from 'vue'
 import CombatSessionPanel from '../components/CombatSessionPanel.vue'
 import { useCombatSession } from '../composables/useCombatSession'
-import { backendPing, backendFetchMap, backendPublishMap, backendFetchInitiative, getBackendBase, setBackendBase } from '../api/characterBackend'
-import { loadParties, type Party } from '../data/partyModel'
-import { normalizeCharacterCard, type CharacterCard } from '../data/dndModel'
 
 // ========== 配置 ==========
 const HEX_SIZE = 30
 const HEX_FT = 5
-const STORAGE_KEY = 'dnd-hexmap'
-const NPC_KEY = 'dnd-map-npcs'
 const MIN_ZOOM = 0.3
 const MAX_ZOOM = 4
-const PALETTE = ['#ef4444', '#3b82f6', '#22c55e', '#f59e0b', '#a855f7', '#14b8a6', '#f97316', '#ec4899']
 
 interface Hex {
   q: number
   r: number
-}
-interface Token {
-  id: number
-  name: string
-  color: string
-  q: number
-  r: number
-  diameter: number
-}
-interface Npc {
-  id: string
-  name: string
-  type: string
-  color: string
-  size: number // 占格
-}
-interface Indicator {
-  id: number
-  type: 'cone' | 'circle'
-  q: number
-  r: number
-  angle: number // 锥形方向（弧度）；圆形忽略
-  ft: number
-  boundTo: number | null // 绑定角色 token id
 }
 
 const stageRef = ref<HTMLDivElement | null>(null)
@@ -269,26 +139,12 @@ let gridCacheKey = ''
 const zoom = ref(1)
 const pan = ref({ x: 0, y: 0 })
 const tool = ref<'pan' | 'char' | 'measure' | 'cone' | 'circle'>('char')
-const libTab = ref<'party' | 'npc' | 'init'>('party')
 const toolsOpen = ref(true)
 const showLibrary = false // 暂屏蔽左上角色来源面板
 const session = useCombatSession()
 watch(session.drawNotifier, () => drawMap())
 
-const tokens = reactive<Token[]>([])
-const indicators = reactive<Indicator[]>([])
-const selectingId = ref<number | null>(null)
 const hoverPos = ref<Hex | null>(null)
-
-// 左上角来源
-const parties = ref<Party[]>([])
-const cards = ref<CharacterCard[]>([])
-const selectedPartyId = ref('')
-const npcs = ref<Npc[]>([])
-const npcName = ref('')
-const npcType = ref('NPC')
-const npcSize = ref(1)
-const npcColor = ref('#ef4444')
 
 const measureStart = ref<Hex | null>(null)
 const measureEnd = ref<Hex | null>(null)
@@ -298,58 +154,22 @@ const coneFt = ref(30)
 const circleFt = ref(20)
 const spellBind = ref('') // 绑定到某个参战者
 
-const mapBaseInput = ref(getBackendBase())
-const mapOnline = ref(false)
-const lastSync = ref('')
-const autoSync = ref(true)
-let syncTimer: ReturnType<typeof setInterval> | null = null
-
-let idCounter = 1
-let dragCharId: number | null = null
 let dragCmbId: string | null = null
 let panDrag = false
-let downOnChar = false
 let downPos = { x: 0, y: 0 }
-let moved = false
-let dragPayload: { name: string; color: string; diameter: number } | null = null
-
-const selectedToken = computed(() => tokens.find((t) => t.id === selectingId.value) || null)
-const mapTagType = computed(() => (mapOnline.value ? 'success' : 'warning'))
-const mapStatusText = computed(() => (mapOnline.value ? '后端已连接' : '后端离线（本地）'))
-
-const partyMembers = computed<CharacterCard[]>(() => {
-  const p = parties.value.find((x) => x.id === selectedPartyId.value)
-  if (!p) return []
-  return p.memberIds.map((id) => cards.value.find((c) => c.id === id)).filter((c): c is CharacterCard => !!c)
-})
-
-// 先攻展示：来自先攻页（名字 + 排序）
-const initiativeRows = ref<{ type: string; name: string; total: number }[]>([])
 
 const size = () => HEX_SIZE * zoom.value
 
 // ========== 初始化 ==========
-onMounted(async () => {
-  loadLocal()
-  loadCards()
-  loadNpcs()
-  if (parties.value.length) selectedPartyId.value = parties.value[0].id
+onMounted(() => {
   resizeCanvas()
   window.addEventListener('resize', resizeCanvas)
   const canvas = canvasRef.value
   if (canvas) ctx = canvas.getContext('2d')
   drawMap()
-  await initMapBackend()
-  onAutoSyncChange()
-  loadInitiative()
-})
-
-watch(libTab, (v) => {
-  if (v === 'init') loadInitiative()
 })
 
 onUnmounted(() => {
-  if (syncTimer) clearInterval(syncTimer)
   window.removeEventListener('resize', resizeCanvas)
 })
 
@@ -360,19 +180,6 @@ function resizeCanvas() {
   canvas.width = stage.clientWidth
   canvas.height = stage.clientHeight
   drawMap()
-}
-
-function loadCards() {
-  try {
-    const saved = localStorage.getItem('dnd-character-cards')
-    if (saved) {
-      const parsed = JSON.parse(saved)
-      cards.value = Array.isArray(parsed) ? parsed.map(normalizeCharacterCard).filter((c): c is CharacterCard => !!c) : []
-    }
-    parties.value = loadParties()
-  } catch (e) {
-    console.error('读取角色数据失败', e)
-  }
 }
 
 // ========== 坐标转换 ==========
@@ -417,11 +224,6 @@ function drawMap() {
   if (gridCache) ctx.drawImage(gridCache, 0, 0)
   const sz = size()
 
-  tokens.forEach((tok) => {
-    const sp = hexToScreen(tok.q, tok.r)
-    drawToken(sp.x, sp.y, charRadius(tok.diameter), tok.color, tok.name, false, tok.id === selectingId.value)
-  })
-
   // 战斗会话：参战者（角色/怪物）
   session.combatants.forEach((cmb) => {
     const sp = hexToScreen(cmb.q, cmb.r)
@@ -457,12 +259,8 @@ function drawMap() {
 
   // 会话法术区域已在上面渲染（本地 indicators 不再使用，避免残留无法删除）
 
-  // 放置预览：从左上角拖入
-  if (dragPayload && hoverPos.value) {
-    const sp = hexToScreen(hoverPos.value.q, hoverPos.value.r)
-    drawToken(sp.x, sp.y, charRadius(dragPayload.diameter), dragPayload.color, dragPayload.name, true)
-  } else if (tool.value === 'char' && hoverPos.value && !dragCharId && !downOnChar) {
-    // 人物工具仅移动/拖动，不再新建；悬浮格轻微高亮
+  if (tool.value === 'char' && hoverPos.value) {
+    // 移动参战者工具的悬浮格轻微高亮
     const sp = hexToScreen(hoverPos.value.q, hoverPos.value.r)
     fillHex(sp.x, sp.y, size(), 'rgba(0,0,0,0.04)')
   }
@@ -719,23 +517,12 @@ function onTouchEnd(e: TouchEvent) {
 function onMouseDown(e: MouseEvent) {
   const { x, y } = eventPos(e)
   downPos = { x, y }
-  moved = false
   if (e.button === 1 || tool.value === 'pan') {
     panDrag = true
-    dragCharId = null
-    downOnChar = false
     return
   }
   if (tool.value !== 'char') return
-  const hit = hitAt(x, y)
-  downOnChar = !!hit
-  dragCharId = null
-  dragCmbId = null
-  if (hit) {
-    if (hit.kind === 'cmb') dragCmbId = hit.id
-    else dragCharId = hit.id
-    selectingId.value = hit.id
-  }
+  dragCmbId = hitAt(x, y)
 }
 function onMouseMove(e: MouseEvent) {
   const { x, y } = eventPos(e)
@@ -747,16 +534,8 @@ function onMouseMove(e: MouseEvent) {
     drawMap()
     return
   }
-  if (dragCmbId != null) {
-    if (Math.hypot(x - downPos.x, y - downPos.y) > 4) moved = true
-    if (hoverPos.value) session.moveCombatant(dragCmbId, hoverPos.value.q, hoverPos.value.r)
-  } else if (dragCharId != null) {
-    if (Math.hypot(x - downPos.x, y - downPos.y) > 4) moved = true
-    const tok = tokens.find((t) => t.id === dragCharId)
-    if (tok && hoverPos.value) {
-      tok.q = hoverPos.value.q
-      tok.r = hoverPos.value.r
-    }
+  if (dragCmbId != null && hoverPos.value) {
+    session.moveCombatant(dragCmbId, hoverPos.value.q, hoverPos.value.r)
   }
   drawMap()
 }
@@ -767,7 +546,7 @@ function onMouseUp(e: MouseEvent) {
   }
   const hex = screenToHex(eventPos(e).x, eventPos(e).y)
   if (tool.value === 'char') {
-    // 拖拽人物：仅移动已放置角色，点击空白不新建
+    // 仅移动参战者，点击空白不新建
   } else if (tool.value === 'measure') {
     if (hex) {
       if (!measureStart.value) {
@@ -794,129 +573,27 @@ function onMouseUp(e: MouseEvent) {
   } else if (tool.value === 'circle') {
     if (hex) commitCircle(hex)
   }
-  dragCharId = null
   dragCmbId = null
-  downOnChar = false
-  saveLocal()
   drawMap()
 }
 function onMouseLeave() {
   hoverPos.value = null
-  dragCharId = null
   dragCmbId = null
   panDrag = false
   drawMap()
 }
-function onContextMenu(e: MouseEvent) {
-  if (session.locked.value) return // 锁定时屏蔽删除
-  const { x, y } = eventPos(e)
-  const hit = hitAt(x, y)
-  // 地图上仅可删除"已放置"的自由 token；会话参战者(角色/怪物)删除在会话面板/行动顺序里操作
-  if (hit && hit.kind === 'token') removeToken(hit.id)
+function onContextMenu() {
+  // 长连接模式：删除参战者在会话面板/行动顺序里操作（地图右键不再删除任何东西）
 }
-function hitAt(x: number, y: number): { kind: 'token' | 'cmb'; id: any } | null {
+function hitAt(x: number, y: number): string | null {
   for (let i = session.combatants.length - 1; i >= 0; i--) {
     const cmb = session.combatants[i]
     const p = hexToScreen(cmb.q, cmb.r)
-    if (Math.hypot(p.x - x, p.y - y) <= charRadius(cmb.size) + 4) return { kind: 'cmb', id: cmb.id }
-  }
-  for (let i = tokens.length - 1; i >= 0; i--) {
-    const tok = tokens[i]
-    const p = hexToScreen(tok.q, tok.r)
-    if (Math.hypot(p.x - x, p.y - y) <= charRadius(tok.diameter) + 4) return { kind: 'token', id: tok.id }
+    if (Math.hypot(p.x - x, p.y - y) <= charRadius(cmb.size) + 4) return cmb.id
   }
   return null
 }
 
-// ========== 拖拽来源（左上角 → 网格） ==========
-function chipPayloadFromCard(m: CharacterCard) {
-  return { name: m.name || '未命名', color: memberColor(m.id), diameter: sizeFromCard(m) }
-}
-function onChipDrag(e: DragEvent, payload: { name: string; color: string; diameter: number }) {
-  dragPayload = payload
-  if (e.dataTransfer) e.dataTransfer.setData('text/plain', payload.name)
-}
-function onDragOver(e: DragEvent) {
-  const { x, y } = eventPos(e)
-  hoverPos.value = screenToHex(x, y)
-  drawMap()
-}
-function onDrop(e: DragEvent) {
-  const { x, y } = eventPos(e)
-  const hex = screenToHex(x, y)
-  if (dragPayload && hex) addToken(hex, dragPayload)
-  dragPayload = null
-  hoverPos.value = null
-  drawMap()
-}
-
-// ========== 操作 ==========
-function addToken(hex: Hex, opts: { name: string; color: string; diameter: number }) {
-  const tok: Token = {
-    id: idCounter++,
-    name: opts.name || '角色' + idCounter,
-    color: opts.color || nextColor(),
-    q: hex.q,
-    r: hex.r,
-    diameter: Math.max(1, opts.diameter || 1),
-  }
-  tokens.push(tok)
-  selectingId.value = tok.id
-  saveLocal()
-  schedulePublish()
-}
-function removeToken(id: number) {
-  const i = tokens.findIndex((t) => t.id === id)
-  if (i !== -1) tokens.splice(i, 1)
-  indicators.forEach((ind) => {
-    if (ind.boundTo === id) ind.boundTo = null
-  })
-  if (selectingId.value === id) selectingId.value = null
-  saveLocal()
-  drawMap()
-}
-function clearAll() {
-  tokens.splice(0)
-  selectingId.value = null
-  saveLocal()
-  drawMap()
-}
-function addNpc() {
-  const name = (npcName.value || 'NPC').trim()
-  npcs.value.push({ id: Date.now().toString(36), name, type: npcType.value, color: npcColor.value, size: npcSize.value })
-  npcName.value = ''
-  saveNpcs()
-}
-function removeNpc(id: string) {
-  const i = npcs.value.findIndex((n) => n.id === id)
-  if (i !== -1) npcs.value.splice(i, 1)
-  saveNpcs()
-}
-// 从先攻页拉取名字与排序（后端共享优先，回退本地先攻状态）
-async function loadInitiative() {
-  try {
-    const remote = await backendFetchInitiative()
-    if (remote && Array.isArray(remote.data) && remote.data.length) {
-      initiativeRows.value = remote.data.map((r: any) => ({ type: r.type || '玩家', name: r.name || '', total: Number(r.total) || 0 }))
-      initiativeRows.value.sort((a, b) => b.total - a.total)
-      return
-    }
-  } catch (e) {
-    /* ignore */
-  }
-  try {
-    const s = localStorage.getItem('dnd-initiative-state')
-    if (s) {
-      const d = JSON.parse(s)
-      if (Array.isArray(d?.characters) && d.characters.length) {
-        initiativeRows.value = d.characters.map((c: any) => ({ type: c.type || '玩家', name: c.name || '', total: Number(c.total) || 0 }))
-        initiativeRows.value.sort((a, b) => b.total - a.total)
-      }
-    }
-  } catch (e) {
-    /* ignore */
-  }
-}
 function clearMeasure() {
   measureStart.value = null
   measureEnd.value = null
@@ -928,14 +605,12 @@ function clearCone() {
     if (session.spellAreas[i].type === 'cone') session.removeSpellArea(session.spellAreas[i].id)
   }
   coneStart.value = null
-  saveLocal()
   drawMap()
 }
 function clearCircle() {
   for (let i = session.spellAreas.length - 1; i >= 0; i--) {
     if (session.spellAreas[i].type === 'circle') session.removeSpellArea(session.spellAreas[i].id)
   }
-  saveLocal()
   drawMap()
 }
 
@@ -948,14 +623,6 @@ const SIZE_OPTIONS = [
   { label: '巨型', val: 3 },
   { label: '超巨型', val: 4 },
 ]
-function sizeFromCard(c: CharacterCard): number {
-  const s = c.size || ''
-  if (s.includes('超巨')) return 4
-  if (s.includes('巨型')) return 3
-  if (s.includes('大型')) return 2
-  if (s.includes('微型')) return 0.5
-  return 1 // 小型 / 中型
-}
 function sizeLabel(val: number): string {
   const s = SIZE_OPTIONS.find((o) => o.val === val)
   return s ? `${s.label} · ${val}格` : `${val}格`
@@ -969,165 +636,6 @@ function hpCurCmb(cmb: any) {
 }
 function hpMaxCmb(cmb: any) {
   session.setHp(cmb.id, { max: cmb.hp.max })
-}
-function cardSizeLabel(c: CharacterCard): string {
-  return c.size || '中型'
-}
-function memberColor(id: string): string {
-  let h = 0
-  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0
-  return PALETTE[h % PALETTE.length]
-}
-let colorIdx = 0
-function nextColor(): string {
-  return PALETTE[colorIdx++ % PALETTE.length]
-}
-
-// ========== 持久化 ==========
-function saveLocal() {
-  localStorage.setItem(
-    STORAGE_KEY,
-    JSON.stringify({
-      tokens: tokens.map((t) => ({ ...t })),
-      indicators: indicators.map((i) => ({ ...i })),
-      coneFt: coneFt.value,
-    })
-  )
-}
-function loadLocal() {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY)
-    if (saved) {
-      const d = JSON.parse(saved)
-      if (Array.isArray(d.tokens)) {
-        d.tokens.forEach((t: any) =>
-          tokens.push({ id: t.id, name: t.name || '角色', color: t.color || '#ef4444', q: t.q, r: t.r, diameter: t.diameter || 1 })
-        )
-        if (tokens.length) idCounter = Math.max(...tokens.map((t) => t.id)) + 1
-      }
-      if (Array.isArray(d.indicators)) {
-        d.indicators.forEach((i: any) =>
-          indicators.push({ id: i.id, type: i.type === 'circle' ? 'circle' : 'cone', q: i.q, r: i.r, angle: i.angle || 0, ft: i.ft || 30, boundTo: i.boundTo ?? null })
-        )
-      }
-      if (typeof d.coneFt === 'number') coneFt.value = d.coneFt
-    }
-  } catch (e) {
-    console.error('读取地图数据失败', e)
-  }
-}
-function saveNpcs() {
-  localStorage.setItem(NPC_KEY, JSON.stringify(npcs.value))
-  schedulePublish()
-}
-function loadNpcs() {
-  try {
-    const saved = localStorage.getItem(NPC_KEY)
-    if (saved) {
-      const d = JSON.parse(saved)
-      if (Array.isArray(d)) npcs.value = d
-    }
-  } catch (e) {
-    console.error('读取 NPC 失败', e)
-  }
-}
-
-// ========== 后端同步 ==========
-async function initMapBackend() {
-  setBackendBase(mapBaseInput.value)
-  const ok = await backendPing()
-  mapOnline.value = ok
-  if (ok) {
-    const data = await backendFetchMap()
-    if (data && (data.tokens?.length || data.indicators?.length || data.npcs?.length)) applyRemoteMap(data)
-    else if (tokens.length || indicators.length || npcs.value.length) await syncMapNow(true)
-  }
-}
-async function testMapConn() {
-  setBackendBase(mapBaseInput.value)
-  const ok = await backendPing()
-  mapOnline.value = ok
-  if (ok) {
-    const data = await backendFetchMap()
-    if (data && (data.tokens.length || data.indicators.length || data.npcs.length)) applyRemoteMap(data)
-    else if (tokens.length || indicators.length || npcs.value.length) await syncMapNow(true)
-    ElMessage.success('后端已连接，地图已同步')
-  } else {
-    ElMessage.warning('无法连接后端')
-  }
-}
-async function syncMapNow(silent = false) {
-  if (!mapOnline.value) {
-    if (!silent) ElMessage.warning('后端离线，无法同步')
-    return
-  }
-  const ok = await backendPublishMap(
-    tokens.map((t) => ({ ...t })),
-    indicators.map((i) => ({ ...i })),
-    npcs.value.map((n) => ({ ...n }))
-  )
-  if (ok) {
-    lastSync.value = new Date().toLocaleTimeString()
-    if (!silent) ElMessage.success('已同步地图')
-  } else if (!silent) {
-    ElMessage.error('同步失败')
-  }
-}
-let publishTimer: ReturnType<typeof setTimeout> | null = null
-function schedulePublish() {
-  if (!mapOnline.value) return
-  if (publishTimer) clearTimeout(publishTimer)
-  publishTimer = setTimeout(() => syncMapNow(true), 1000)
-}
-async function pullMap() {
-  if (!mapOnline.value || dragCharId != null) return
-  const data = await backendFetchMap()
-  if (data) mergeRemote(data)
-}
-function mergeList(local: any[], remote: any[], key: (x: any) => any) {
-  remote.forEach((r: any) => {
-    const existing = local.find((x) => key(x) === key(r))
-    if (existing) Object.assign(existing, r)
-    else local.push(r)
-  })
-}
-function mergeRemote(data: { tokens: any[]; indicators: any[]; npcs: any[] }) {
-  mergeList(tokens, data.tokens || [], (t) => t.id)
-  mergeList(indicators, data.indicators || [], (i) => i.id)
-  mergeList(npcs.value, data.npcs || [], (n) => n.id)
-  idCounter = Math.max(idCounter, ...tokens.map((t) => t.id), ...indicators.map((i) => i.id)) + 1
-  drawMap()
-}
-function onAutoSyncChange() {
-  if (syncTimer) clearInterval(syncTimer)
-  syncTimer = null
-  if (autoSync.value && mapOnline.value) {
-    syncTimer = setInterval(async () => {
-      await syncMapNow(true) // 推送本地
-      await pullMap() // 拉取并合并（实时看到他人）
-    }, 5000)
-  }
-}
-// 用后端整份数据替换本地
-function applyRemoteMap(data: { tokens: any[]; indicators: any[]; npcs: any[] }) {
-  tokens.splice(0)
-  ;(data.tokens || []).forEach((t: any) =>
-    tokens.push(normToken(t))
-  )
-  indicators.splice(0)
-  ;(data.indicators || []).forEach((i: any) =>
-    indicators.push({ id: i.id, type: i.type === 'circle' ? 'circle' : 'cone', q: i.q, r: i.r, angle: i.angle || 0, ft: i.ft || 30, boundTo: i.boundTo ?? null })
-  )
-  npcs.value.splice(0)
-  ;(data.npcs || []).forEach((n: any) =>
-    npcs.value.push({ id: n.id, name: n.name || 'NPC', type: n.type || 'NPC', color: n.color || '#ef4444', size: Number(n.size) || 1 })
-  )
-  if (tokens.length) idCounter = Math.max(...tokens.map((t) => t.id)) + 1
-  if (indicators.length) idCounter = Math.max(idCounter, ...indicators.map((i) => i.id)) + 1
-  drawMap()
-}
-function normToken(t: any): Token {
-  return { id: t.id, name: t.name || '角色', color: t.color || '#ef4444', q: t.q, r: t.r, diameter: t.diameter || 1 }
 }
 </script>
 

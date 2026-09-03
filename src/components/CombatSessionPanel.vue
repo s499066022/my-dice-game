@@ -128,7 +128,6 @@ const statusCls = computed(() => (online.value && connected.value ? 'on' : conne
 // 团与角色池（优先后端；后端空/离线退回本地）
 const parties = ref<Party[]>([])
 const cardPool = ref<CharacterCard[]>([])
-let poolLoaded = false
 
 function toParty(p: any): Party {
   const members = Array.isArray(p.member_ids) ? p.member_ids : Array.isArray(p.memberIds) ? p.memberIds : []
@@ -154,10 +153,11 @@ async function loadPartyCards() {
   else partyCards.value = []
 }
 
-// 角色池 = 本地卡 + 后端卡（按 id 去重，后端优先覆盖同名）
+// 角色池 = 本地卡（本地有就不重复拉后端，减少数据量）；缺的成员角色才向后端补拉一次
+let remotePoolTried = false
 async function ensureCardPool() {
-  if (poolLoaded) return
-  poolLoaded = true
+  const needed = new Set<string>()
+  parties.value.forEach((p) => p.memberIds.forEach((id) => needed.add(id)))
   const map = new Map<string, CharacterCard>()
   try {
     const saved = localStorage.getItem('dnd-character-cards')
@@ -169,16 +169,20 @@ async function ensureCardPool() {
   } catch (e) {
     /* 忽略 */
   }
-  try {
-    const remote = await backendFetchAll() // 后端角色卡（跨浏览器共享）
-    if (Array.isArray(remote)) {
-      remote.forEach((c: any) => {
-        const n = normalizeCharacterCard(c)
-        if (n && n.id) map.set(n.id, n)
-      })
+  const missing = [...needed].filter((id) => !map.has(id))
+  if (missing.length && !remotePoolTried) {
+    remotePoolTried = true
+    try {
+      const remote = await backendFetchAll() // 后端角色卡（跨浏览器共享；仅缺卡时拉一次）
+      if (Array.isArray(remote)) {
+        remote.forEach((c: any) => {
+          const n = normalizeCharacterCard(c)
+          if (n && n.id) map.set(n.id, n)
+        })
+      }
+    } catch (e) {
+      /* 忽略 */
     }
-  } catch (e) {
-    /* 忽略 */
   }
   cardPool.value = [...map.values()]
 }
