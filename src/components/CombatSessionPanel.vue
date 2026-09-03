@@ -2,7 +2,7 @@
   <div class="cs-panel">
     <div class="cs-head">
       <h3>⚔️ 战斗会话</h3>
-      <span class="cs-status" :class="{ on: online }">{{ online ? '🔴 已连接(长连接)' : '🟢 本地(未连后端)' }}</span>
+      <span class="cs-status" :class="statusCls">{{ statusText }}</span>
     </div>
 
     <!-- 会话控制 -->
@@ -11,7 +11,7 @@
         <el-option value="" label="未选择团" />
         <el-option v-for="p in parties" :key="p.id" :value="p.id" :label="p.name || '团'" />
       </el-select>
-      <el-button size="small" :type="locked ? 'warning' : 'success'" plain @click="session.toggleLock()">🔒 锁定</el-button>
+      <el-button size="small" :type="locked ? 'warning' : 'success'" plain @click="onLock">🔒 锁定</el-button>
       <el-button size="small" type="danger" plain @click="onReset">重置</el-button>
       <span v-if="sessionId" class="cs-session">会话(团ID): {{ sessionId }}</span>
     </div>
@@ -21,7 +21,7 @@
       <div class="cs-order-head">
         <span>行动顺序</span>
         <span class="cs-actions">
-          <el-button size="small" text @click="rollInit">🎲 掷先攻</el-button>
+          <el-button size="small" text :disabled="locked" @click="rollInit">🎲 掷先攻</el-button>
           <el-button size="small" text @click="nextTurn">下回合</el-button>
           <span v-if="round" class="cs-round">回合 {{ round }}</span>
         </span>
@@ -38,22 +38,24 @@
             <td class="cs-rk">{{ c.order }}</td>
             <td><span class="cs-dot" :style="{ background: c.color }"></span><span class="cs-ty">{{ c.type === 'monster' ? '怪' : '角' }}</span></td>
             <td class="cs-nm">
-              <input type="color" v-model="c.color" class="cs-col" @change="touch" />
+              <input type="color" v-model="c.color" class="cs-col" @change="touch(c)" />
               <span class="cs-nm-txt">{{ c.name }}</span>
             </td>
             <td>
-              <el-select v-model="c.advantage" size="small" style="width: 70px" @change="touch">
+              <el-select v-model="c.advantage" size="small" style="width: 70px" @change="touch(c)">
                 <el-option value="normal" label="普通" /><el-option value="advantage" label="优势" /><el-option value="disadvantage" label="劣势" />
               </el-select>
             </td>
             <td class="cs-roll">{{ c.initiativeRoll || '—' }}</td>
             <td class="cs-bonus">+{{ c.initiativeBonus }}{{ advNum(c.advantage) >= 0 ? '+' + advNum(c.advantage) : advNum(c.advantage) }}</td>
             <td class="cs-total">{{ c.initiativeTotal || '—' }}</td>
-            <td>{{ c.ac }}</td>
+            <td class="cs-ac">
+              <input type="number" v-model.number="c.ac" class="hp-in ac-in" min="0" @change="touch(c)" />
+            </td>
             <td class="cs-hp">
-              <input type="number" v-model.number="c.hp.current" class="hp-in" min="0" @change="touch" />
+              <input type="number" v-model.number="c.hp.current" class="hp-in" min="0" @change="hpCur(c)" />
               <span class="hp-sep">/</span>
-              <input type="number" v-model.number="c.hp.max" class="hp-in" min="0" @change="touch" />
+              <input type="number" v-model.number="c.hp.max" class="hp-in" min="1" @change="hpMax(c)" />
             </td>
             <td>
               <button class="cs-mini" title="换位" :disabled="locked" @click="swapClick(c.id)">⇄</button>
@@ -94,6 +96,7 @@ import { ElMessage } from 'element-plus'
 import { useCombatSession, type Combatant } from '../composables/useCombatSession'
 import { loadParties, type Party } from '../data/partyModel'
 import { normalizeCharacterCard, type CharacterCard } from '../data/dndModel'
+import { backendFetchParties, backendFetchAll } from '../api/characterBackend'
 
 const SIZE = [
   { label: '微型', val: 0.5 }, { label: '小型', val: 1 }, { label: '中型', val: 1 },
@@ -110,88 +113,139 @@ const sessionId = session.sessionId
 const ordered = session.orderedCombatants
 const round = session.round
 const currentCombatantId = session.currentCombatantId
+const connected = session.connected
 const online = session.online
 const locked = session.locked
 
-// 团里可添加的角色卡
-const partyCards = ref<CharacterCard[]>([])
+// 连接状态显示
+const statusText = computed(() => {
+  if (online.value && connected.value) return '🔴 实时同步(长连接)'
+  if (connected.value) return '🟠 已连后端(REST)'
+  return '🟢 本地(未连后端)'
+})
+const statusCls = computed(() => (online.value && connected.value ? 'on' : connected.value ? 'mid' : ''))
+
+// 团与角色池（优先后端；后端空/离线退回本地）
 const parties = ref<Party[]>([])
-function loadPartyCards() {
-  parties.value = loadParties()
+const cardPool = ref<CharacterCard[]>([])
+let poolLoaded = false
+
+function toParty(p: any): Party {
+  const members = Array.isArray(p.member_ids) ? p.member_ids : Array.isArray(p.memberIds) ? p.memberIds : []
+  return { id: String(p.id), name: p.name || '团', memberIds: members.map(String), createdAt: '', updatedAt: '' }
+}
+
+async function loadPartyCards() {
+  let local = loadParties()
+  let remote: any[] | null = null
+  if (session.connected.value) remote = await backendFetchParties()
+  if (remote && remote.length) parties.value = remote.map(toParty)
+  else parties.value = local
   if (!parties.value.length) {
     partyCards.value = []
     return
   }
+  await ensureCardPool()
   if (selectedParty.value) loadCardsForParty(selectedParty.value)
   else partyCards.value = []
 }
+
+// 角色池 = 本地卡 + 后端卡（按 id 去重，后端优先覆盖同名）
+async function ensureCardPool() {
+  if (poolLoaded) return
+  poolLoaded = true
+  const map = new Map<string, CharacterCard>()
+  try {
+    const saved = localStorage.getItem('dnd-character-cards')
+    const list = saved ? JSON.parse(saved) : []
+    ;(Array.isArray(list) ? list : []).forEach((c: any) => {
+      const n = normalizeCharacterCard(c)
+      if (n && n.id) map.set(n.id, n)
+    })
+  } catch (e) {
+    /* 忽略 */
+  }
+  if (session.connected.value) {
+    const remote = await backendFetchAll()
+    if (Array.isArray(remote)) {
+      remote.forEach((c: any) => {
+        const n = normalizeCharacterCard(c)
+        if (n && n.id) map.set(n.id, n)
+      })
+    }
+  }
+  cardPool.value = [...map.values()]
+}
+
 function loadCardsForParty(partyId: string) {
   const p = parties.value.find((x) => x.id === partyId)
   if (!p) {
     partyCards.value = []
     return
   }
-  try {
-    const saved = localStorage.getItem('dnd-character-cards')
-    const list = saved ? JSON.parse(saved) : []
-    partyCards.value = p.memberIds.map((id) => list.find((c: any) => c.id === id)).filter(Boolean).map((c: any) => normalizeCharacterCard(c)).filter((c: any): c is CharacterCard => !!c)
-  } catch (e) {
-    partyCards.value = []
-  }
+  partyCards.value = p.memberIds.map((id) => cardPool.value.find((c) => c.id === id)).filter(Boolean).map((c) => c as CharacterCard)
 }
 
-// 选择团 = 创建/加入该团会话；首次创建才带入全团，否则读取上次数据；未选择团则不改动
-function onPartySelect(id: string) {
+const partyCards = ref<CharacterCard[]>([])
+
+// 选择团 = 创建/加入该团会话（后端权威，首次自动建会）；未选择团则不改动
+async function onPartySelect(id: string) {
   if (!id) return
-  const res = session.createOrJoinParty(id)
-  loadCardsForParty(id)
-  // 无论首次还是已有数据，都把「角色类参战者」严格对账到当前团成员（去重/剔除其它团）：
-  reconcileParty(partyCards.value)
-  if (!res.existed) ElMessage.success('已创建会话（团ID），并带入全团')
-  else ElMessage.success('已读取该团会话数据')
-}
-
-// 对账：角色类参战者 = 当前团成员（按 refId 增/删；怪物保留，已知位置不动）
-function reconcileParty(cards: CharacterCard[]) {
-  const refIds = new Set(cards.map((c) => c.id))
-  for (let i = session.combatants.length - 1; i >= 0; i--) {
-    const cmb = session.combatants[i]
-    if (cmb.type === 'character' && cmb.refId && !refIds.has(cmb.refId)) session.removeCombatant(cmb.id)
+  await loadCardsForParty(id)
+  const res = await session.createOrJoinParty(id)
+  // 无论首次还是已有数据，都把「角色类参战者」严格对账到当前团成员（去重/剔除其它团，怪物保留）
+  await session.reconcileParty(partyCards.value)
+  if (session.connected.value) {
+    ElMessage.success(res.existed ? '已进入该团战斗会话（后端）' : '已创建战斗会话（后端）')
+  } else {
+    ElMessage.success('后端不可达，已用本地数据进入会话')
   }
-  cards.forEach((c) => {
-    if (!session.combatants.some((x) => x.refId === c.id)) session.addCharacter(c)
-  })
 }
 
 function onReset() {
   session.resetSession()
-  ElMessage.info('已重置')
+  selectedParty.value = ''
+  partyCards.value = []
+  ElMessage.info('已重置（回到未选择团）')
 }
-function rollInit() {
-  session.rollInitiative()
-  ElMessage.success('已掷先攻')
+
+function onLock() {
+  session.toggleLock()
+}
+
+async function rollInit() {
+  const ok = await session.rollInitiative()
+  if (ok) ElMessage.success('已掷先攻')
+  else ElMessage.error('掷先攻失败（可能会话已锁定）')
 }
 function nextTurn() {
   session.nextRound()
 }
-function touch() {
-  session.saveLocal()
-  session.drawNotifier.value++
+// 行内编辑（颜色/优劣/AC）整条同步
+function touch(c: Combatant) {
+  session.syncCombatant(c.id)
+}
+function hpCur(c: Combatant) {
+  session.setHp(c.id, { current: c.hp.current })
+}
+function hpMax(c: Combatant) {
+  session.setHp(c.id, { max: c.hp.max })
 }
 function advNum(a: string): number {
   return a === 'advantage' ? 5 : a === 'disadvantage' ? -5 : 0
 }
 let swapSel: string | null = null
-function swapClick(id: string) {
+async function swapClick(id: string) {
   if (!swapSel) {
     swapSel = id
     ElMessage.info('已选中，再点另一个参战者换位')
   } else if (swapSel === id) {
     swapSel = null
   } else {
-    session.swapCombatants(swapSel, id)
+    const ok = await session.swapCombatants(swapSel, id)
     swapSel = null
-    ElMessage.success('已换位')
+    if (ok) ElMessage.success('已换位')
+    else ElMessage.error('换位失败')
   }
 }
 function remove(id: string) {
@@ -218,10 +272,14 @@ function addMob() {
   ElMessage.success('已添加怪物')
 }
 
-onMounted(() => {
-  session.loadLocal()
-  session.hookReverb()
-  loadPartyCards()
+onMounted(async () => {
+  await loadPartyCards()
+  // 恢复上次团（保持"返回随时查看"）
+  const last = session.getLastPartyId()
+  if (last && parties.value.some((p) => p.id === last)) {
+    selectedParty.value = last
+    await onPartySelect(last)
+  }
 })
 </script>
 
@@ -248,6 +306,9 @@ onMounted(() => {
 }
 .cs-status.on {
   color: #dc2626;
+}
+.cs-status.mid {
+  color: #ea8f0b;
 }
 .cs-row {
   display: flex;
@@ -347,12 +408,18 @@ onMounted(() => {
 .cs-hp {
   color: #b91c1c;
 }
+.cs-ac {
+  color: #374151;
+}
 .hp-in {
   width: 48px;
   padding: 2px 4px;
   border: 1px solid #d1d5db;
   border-radius: 4px;
   text-align: center;
+}
+.ac-in {
+  width: 40px;
 }
 .hp-sep {
   color: #9ca3af;

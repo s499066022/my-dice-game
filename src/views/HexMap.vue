@@ -164,18 +164,18 @@
           <div v-if="session.combatants.length" class="tp-list">
             <div class="tp-list-title">⚔️ 参战者（{{ session.combatants.length }}）</div>
             <div v-for="cmb in session.combatants" :key="cmb.id" class="tp-row tp-row-token" :class="{ on: cmb.id === session.currentCombatantId.value }" :title="'卡片ID: ' + (cmb.refId || '—')">
-              <input type="color" v-model="cmb.color" class="tp-col" @click.stop @change="saveSession" />
-              <input type="text" v-model="cmb.name" class="tp-name" @click.stop />
+              <input type="color" v-model="cmb.color" class="tp-col" @click.stop @change="syncCmb(cmb)" />
+              <input type="text" v-model="cmb.name" class="tp-name" @click.stop @change="syncCmb(cmb)" />
               <span class="tp-stat">
-                <input type="number" v-model.number="cmb.hp.current" class="tp-hp" min="0" @click.stop @change="saveSession" />
+                <input type="number" v-model.number="cmb.hp.current" class="tp-hp" min="0" @click.stop @change="hpCurCmb(cmb)" />
                 <span class="tp-hpsep">/</span>
-                <input type="number" v-model.number="cmb.hp.max" class="tp-hp" min="0" @click.stop @change="saveSession" />
+                <input type="number" v-model.number="cmb.hp.max" class="tp-hp" min="0" @click.stop @change="hpMaxCmb(cmb)" />
               </span>
               <span class="tp-stat">AC{{ cmb.ac }}</span>
-              <el-select v-model="cmb.size" size="small" style="width: 104px" @click.stop>
+              <el-select v-model="cmb.size" size="small" style="width: 104px" @click.stop @change="syncCmb(cmb)">
                 <el-option v-for="o in SIZE_OPTIONS" :key="o.label" :value="o.val" :label="sizeLabel(o.val)" />
               </el-select>
-              <!-- <button class="tp-del" title="移除" :disabled="session.locked.value" @click.stop="session.removeCombatant(cmb.id)">✕</button> -->
+              <!-- 地图列表不提供删除参战者（在会话面板/行动顺序里操作） -->
             </div>
           </div>
 
@@ -199,7 +199,7 @@
             <div v-for="ind in session.spellAreas" :key="ind.id" class="tp-row">
               <span class="tp-dot" :style="{ background: ind.type === 'circle' ? '#3b82f6' : '#ef4444' }"></span>
               <span class="tp-kind">{{ ind.type === 'circle' ? '🔵' : '🔺' }}{{ ind.ft }}尺</span>
-              <el-select v-model="ind.boundTo" size="small" style="width: 112px" placeholder="绑定参战者" @change="saveSession">
+              <el-select v-model="ind.boundTo" size="small" style="width: 112px" placeholder="绑定参战者" @change="session.updateSpellArea(ind.id, { boundTo: ind.boundTo })">
                 <el-option :value="null" label="不绑定" />
                 <el-option v-for="t in session.combatants" :key="t.id" :value="t.id" :label="t.name || '角色'" />
               </el-select>
@@ -338,8 +338,6 @@ onMounted(async () => {
   window.addEventListener('resize', resizeCanvas)
   const canvas = canvasRef.value
   if (canvas) ctx = canvas.getContext('2d')
-  session.loadLocal()
-  session.hookReverb()
   drawMap()
   await initMapBackend()
   onAutoSyncChange()
@@ -813,10 +811,8 @@ function onContextMenu(e: MouseEvent) {
   if (session.locked.value) return // 锁定时屏蔽删除
   const { x, y } = eventPos(e)
   const hit = hitAt(x, y)
-  if (hit) {
-    if (hit.kind === 'cmb') session.removeCombatant(hit.id)
-    else removeToken(hit.id)
-  }
+  // 地图上仅可删除"已放置"的自由 token；会话参战者(角色/怪物)删除在会话面板/行动顺序里操作
+  if (hit && hit.kind === 'token') removeToken(hit.id)
 }
 function hitAt(x: number, y: number): { kind: 'token' | 'cmb'; id: any } | null {
   for (let i = session.combatants.length - 1; i >= 0; i--) {
@@ -964,9 +960,15 @@ function sizeLabel(val: number): string {
   const s = SIZE_OPTIONS.find((o) => o.val === val)
   return s ? `${s.label} · ${val}格` : `${val}格`
 }
-function saveSession() {
-  session.saveLocal()
-  session.drawNotifier.value++
+// 会话参战者行内编辑（颜色/名字/体型/AC 等整条同步到后端）
+function syncCmb(cmb: any) {
+  session.syncCombatant(cmb.id)
+}
+function hpCurCmb(cmb: any) {
+  session.setHp(cmb.id, { current: cmb.hp.current })
+}
+function hpMaxCmb(cmb: any) {
+  session.setHp(cmb.id, { max: cmb.hp.max })
 }
 function cardSizeLabel(c: CharacterCard): string {
   return c.size || '中型'

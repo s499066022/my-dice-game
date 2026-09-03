@@ -1,47 +1,106 @@
 // src/api/reverb.ts
-// Laravel Reverb 长连接（laravel-echo + pusher-js）。
-// 若尚未在 main.ts 初始化 window.Echo，则优雅降级为 localStorage（online=false）；
-// 装上依赖并在 main.ts 初始化后，hookReverb 会自动走长连接全员同步。
+// Laravel Reverb 长连接（laravel-echo + pusher-js，Pusher 协议）。
+// 后端（chain/php）事实：
+//   - 频道 presence-combat.{sessionId}（Laravel PresenceChannel('combat.x') -> presence-combat.x）
+//   - 事件为裸名（broadcastAs 类短名）：CombatSessionState / CombatantAdded / CombatantUpdated /
+//     CombatantRemoved / InitiativeRolled / CombatantSwapped / SpellAreaUpdated / TurnChanged / SessionLocked
+//   - 载荷统一在 e.data 下
+//   - 鉴权：POST {base}/broadcasting/auth，可带 X-Dnd-User 头区分 presence 成员
+// 若未初始化（window.Echo 缺失），优雅降级为 localStorage（online=false）。
 
-interface ReverbHandlers {
-  onSnapshot?: (data: any) => void
-  onUpdate?: () => void
+import Echo from 'laravel-echo'
+import Pusher from 'pusher-js'
+import { getBackendBase, userId } from './characterBackend'
+
+// ---------- Reverb 连接参数（可经 VITE_REVERB_* 覆盖；无 env 时兜底线上） ----------
+const REVERB_KEY = (import.meta.env.VITE_REVERB_APP_KEY as string) || '163b438a069828cd1dd3dc585a607eab'
+const REVERB_HOST = (import.meta.env.VITE_REVERB_HOST as string) || '106.12.131.21'
+const REVERB_PORT = Number(import.meta.env.VITE_REVERB_PORT || 12226)
+const REVERB_SCHEME = ((import.meta.env.VITE_REVERB_SCHEME as string) || 'http').toLowerCase()
+
+export function initEcho(): void {
+  if ((window as any).Echo) return
+  try {
+    ;(window as any).Pusher = Pusher
+    ;(window as any).Echo = new Echo({
+      broadcaster: 'reverb',
+      key: REVERB_KEY,
+      wsHost: REVERB_HOST,
+      wsPort: REVERB_PORT,
+      wssPort: REVERB_PORT,
+      forceTLS: REVERB_SCHEME === 'https',
+      enabledTransports: ['ws', 'wss'],
+      authEndpoint: `${getBackendBase()}/broadcasting/auth`,
+      auth: { headers: { 'X-Dnd-User': userId() } },
+    })
+  } catch (e) {
+    console.error('initEcho 失败，走本地模式', e)
+    ;(window as any).Echo = null
+  }
+}
+
+export function hasEcho(): boolean {
+  try {
+    return !!(window as any).Echo && typeof (window as any).Echo.channel === 'function'
+  } catch {
+    return false
+  }
+}
+
+export interface ReverbHandlers {
+  onSessionState?: (snapshot: any) => void
+  onCombatantAdded?: (combatant: any) => void
+  onCombatantUpdated?: (combatant: any) => void
+  onCombatantRemoved?: (combatantId: string) => void
+  onInitiativeRolled?: (order: any[]) => void
+  onCombatantSwapped?: (aId: string, bId: string) => void
+  onSpellAreaUpdated?: (spellArea: any) => void
+  onTurnChanged?: (currentCombatantId: string | null, round: number) => void
+  onSessionLocked?: (locked: boolean) => void
   onOnline?: (online: boolean) => void
 }
 
-// 初始化入口（在 main.ts 调用；依赖安装后取消注释）
-// import Echo from 'laravel-echo'
-// export function initEcho() {
-//   ;(window as any).Echo = new Echo({
-//     broadcaster: 'reverb',
-//     key: import.meta.env.VITE_REVERB_APP_KEY,
-//     wsHost: import.meta.env.VITE_REVERB_HOST,
-//     wsPort: import.meta.env.VITE_REVERB_PORT,
-//     wssPort: import.meta.env.VITE_REVERB_PORT,
-//     forceTLS: (import.meta.env.VITE_REVERB_SCHEME ?? 'https') === 'https',
-//     enabledTransports: ['ws', 'wss'],
-//   })
-// }
-
-export function connectReverb(channel: string, handlers: ReverbHandlers): any {
-  try {
-    const Ech = (window as any).Echo
-    if (Ech && Ech.channel) {
-      const ch = Ech.channel('presence-' + channel)
-      ch.listen('.CombatSessionState', (e: any) => handlers.onSnapshot?.(e.data))
-      ch.listen('.CombatantUpdated', () => handlers.onUpdate?.())
-      ch.listen('.CombatantAdded', () => handlers.onUpdate?.())
-      ch.listen('.CombatantRemoved', () => handlers.onUpdate?.())
-      ch.listen('.CombatantSwapped', () => handlers.onUpdate?.())
-      ch.listen('.InitiativeRolled', () => handlers.onUpdate?.())
-      ch.listen('.SpellAreaUpdated', () => handlers.onUpdate?.())
-      ch.listen('.TurnChanged', () => handlers.onUpdate?.())
-      handlers.onOnline?.(true)
-      return ch
-    }
-  } catch (e) {
-    // 忽略：未连接时走本地
+// 订阅 presence-combat.{sessionId}；返回可 leave 的句柄，失败返回 null
+export function connectReverb(sessionId: string, handlers: ReverbHandlers): any {
+  const echo: any = (window as any).Echo
+  if (!sessionId || !echo || !echo.channel) {
+    handlers.onOnline?.(false)
+    return null
   }
-  handlers.onOnline?.(false)
-  return null
+  try {
+    const ch = echo.join('combat.' + sessionId) // -> presence-combat.{sessionId}
+    ch.listen('.CombatSessionState', (e: any) => handlers.onSessionState?.(e?.data ?? e))
+    ch.listen('.CombatantAdded', (e: any) => handlers.onCombatantAdded?.((e?.data ?? e)?.combatant))
+    ch.listen('.CombatantUpdated', (e: any) => handlers.onCombatantUpdated?.((e?.data ?? e)?.combatant))
+    ch.listen('.CombatantRemoved', (e: any) => handlers.onCombatantRemoved?.((e?.data ?? e)?.combatant_id))
+    ch.listen('.InitiativeRolled', (e: any) => handlers.onInitiativeRolled?.((e?.data ?? e)?.order))
+    ch.listen('.CombatantSwapped', (e: any) => {
+      const d = e?.data ?? e
+      handlers.onCombatantSwapped?.(d?.a_id, d?.b_id)
+    })
+    ch.listen('.SpellAreaUpdated', (e: any) => handlers.onSpellAreaUpdated?.((e?.data ?? e)?.spell_area))
+    ch.listen('.TurnChanged', (e: any) => {
+      const d = e?.data ?? e
+      handlers.onTurnChanged?.(d?.current_combatant_id, d?.round)
+    })
+    ch.listen('.SessionLocked', (e: any) => handlers.onSessionLocked?.((e?.data ?? e)?.locked))
+    ch.here(() => handlers.onOnline?.(true))
+    ch.error?.(() => handlers.onOnline?.(false))
+    return ch
+  } catch (e) {
+    console.error('订阅战斗频道失败', e)
+    handlers.onOnline?.(false)
+    return null
+  }
+}
+
+export function leaveReverb(sessionId: string): void {
+  try {
+    const echo: any = (window as any).Echo
+    if (echo && echo.leaveChannel) {
+      echo.leaveChannel('presence-combat.' + sessionId)
+    }
+  } catch {
+    // 忽略
+  }
 }

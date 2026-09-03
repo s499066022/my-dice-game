@@ -196,6 +196,103 @@ export async function backendPublishParties(parties: any[]): Promise<boolean> {
   }
 }
 
+// ========== 通用请求（战斗会话用；带 X-Dnd-User 区分 presence 成员） ==========
+export function userId(): string {
+  const KEY = 'dnd-user-id'
+  try {
+    let u = localStorage.getItem(KEY)
+    if (!u) {
+      u = 'u-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4)
+      localStorage.setItem(KEY, u)
+    }
+    return u
+  } catch (e) {
+    return 'u-anon'
+  }
+}
+
+// 统一请求：返回 {ok:...} JSON；网络失败返回 null
+export async function apiJson(method: string, path: string, body?: any): Promise<any | null> {
+  try {
+    const res = await fetch(`${baseUrl()}${path}`, {
+      method,
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-Dnd-User': userId() },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    })
+    const text = await res.text()
+    try {
+      return text ? JSON.parse(text) : { ok: res.ok }
+    } catch (e) {
+      return { ok: false, error: 'HTTP ' + res.status + ': ' + text.slice(0, 200) }
+    }
+  } catch (e) {
+    console.error(`api ${method} ${path} 失败`, e)
+    return null
+  }
+}
+
+// ========== 战斗会话（API.md §6，团 id = 会话 id） ==========
+export async function backendCombatSessionShow(id: string): Promise<any | null> {
+  const r = await apiJson('GET', `/combat-sessions/${encodeURIComponent(id)}`)
+  return r && r.ok === true && r.data ? r.data : null
+}
+
+export async function backendCombatSessionCreate(partyId: string): Promise<any | null> {
+  const r = await apiJson('POST', '/combat-sessions', { party_id: partyId, dm_user_id: userId() })
+  return r && r.ok === true && r.data ? r.data : null
+}
+
+export async function backendCombatantsSync(sessionId: string, combatants: any[]): Promise<any | null> {
+  return apiJson('POST', `/combat-sessions/${encodeURIComponent(sessionId)}/combatants/sync`, { combatants })
+}
+
+export async function backendCombatantAdd(sessionId: string, combatant: any): Promise<any | null> {
+  return apiJson('POST', `/combat-sessions/${encodeURIComponent(sessionId)}/combatants`, combatant)
+}
+
+export async function backendCombatantPatch(id: string, fields: any): Promise<any | null> {
+  return apiJson('PATCH', `/combatants/${encodeURIComponent(id)}`, fields)
+}
+
+export async function backendCombatantDelete(id: string): Promise<any | null> {
+  return apiJson('DELETE', `/combatants/${encodeURIComponent(id)}`)
+}
+
+export async function backendCombatantSwap(id: string, otherId: string): Promise<any | null> {
+  return apiJson('POST', `/combatants/${encodeURIComponent(id)}/swap`, { other_id: otherId })
+}
+
+export async function backendRollInitiative(sessionId: string): Promise<any | null> {
+  return apiJson('POST', `/combat-sessions/${encodeURIComponent(sessionId)}/roll-initiative`)
+}
+
+export async function backendSetLock(sessionId: string, locked: boolean): Promise<any | null> {
+  return apiJson('POST', `/combat-sessions/${encodeURIComponent(sessionId)}/lock`, { locked })
+}
+
+export async function backendTurn(sessionId: string): Promise<any | null> {
+  return apiJson('POST', `/combat-sessions/${encodeURIComponent(sessionId)}/turn`)
+}
+
+export async function backendSpellAreaAdd(sessionId: string, area: any): Promise<any | null> {
+  return apiJson('POST', `/combat-sessions/${encodeURIComponent(sessionId)}/spell-areas`, area)
+}
+
+export async function backendSpellAreaUpdate(id: string, area: any): Promise<any | null> {
+  return apiJson('PATCH', `/spell-areas/${encodeURIComponent(id)}`, area)
+}
+
+export async function backendSpellAreaDelete(id: string): Promise<any | null> {
+  return apiJson('DELETE', `/spell-areas/${encodeURIComponent(id)}`)
+}
+
+// ========== 团（Party）==========
+export async function backendFetchPartyList(): Promise<any[] | null> {
+  const r = await apiJson('GET', '/parties')
+  if (r && r.ok === true && Array.isArray(r.data)) return r.data
+  return null
+}
+
 // 响应式的后端连接状态（供页面展示）
 export interface BackendStatusState {
   status: BackendStatus
