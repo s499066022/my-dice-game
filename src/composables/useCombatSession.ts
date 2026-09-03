@@ -150,7 +150,10 @@ function localToApi(c: Combatant): any {
     ac: c.ac,
     hp: { current: c.hp?.current || 0, max: c.hp?.max || 0 },
     controlled_by: c.controlledBy || null,
-    payload: c.payload ?? null,
+    // 注意：Reverb/Pusher 单条消息约 10KB 上限。
+    // 角色卡完整数据在 /characters 表（combatant.ref_id 关联），不重复塞进 payload；
+    // 怪物 payload 保留（第一版仅记录，勿放大卡数据以免广播超限）。
+    payload: c.type === 'character' ? null : c.payload ?? null,
   }
 }
 
@@ -489,7 +492,8 @@ function buildCharacter(card: CharacterCard): Combatant {
     advantage: (card.initiativeAdvantage as CombatantAdvantage) || 'normal',
     ac: getTotalAC(card),
     hp: { current: card.hp.current, max: card.hp.max },
-    payload: card,
+    // 不携带整张角色卡（Reverb 广播 10KB 限制）；数据经 ref_id 关联 /characters
+    payload: undefined,
   }
 }
 

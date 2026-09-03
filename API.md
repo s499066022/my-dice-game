@@ -97,6 +97,14 @@
 - `initiative_total = initiative_roll + initiative_bonus + 优劣值(±5) + 装备修正`。
 - **攻击/释放的怪物**：`payload` 记录怪物卡完整信息（属性/技能/动作/反应/免疫…，第一版只存不展示，供图鉴）。
 
+> **载荷上限**：Reverb/Pusher 单条消息约 10KB。快照/事件会整体广播，**参战者 payload 务必精简**
+> （角色卡完整数据在 `characters` 表，前端已通过 `ref_id` 关联，不重复写入 combatant.payload；角色 payload 一律传 null）。
+> 怪物 payload 为将来图鉴预留，请控制单卡 < ~6KB，避免多人同会时快照超限。
+
+> **并发去重**：`combatants/sync` 按 `ref_id` 对账。两人几乎同时为同一团建会并 sync 时，
+> 两个事务互不可见可能各插入一行（同 ref_id 双份）。建议对 `combatants(session_id, ref_id)` 加唯一索引
+> （`type='character'` 且 `ref_id` 非空时生效），并在 sync/store 事务内对行加锁（`lockForUpdate`）规避。
+
 **SpellArea**（法术区域）：
 ```jsonc
 { "id":"...","type":"cone|circle","q":3,"r":-1,"angle":0.6,"ft":30,"bound_to":"c1" }

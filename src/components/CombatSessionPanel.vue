@@ -138,7 +138,11 @@ function toParty(p: any): Party {
 async function loadPartyCards() {
   let local = loadParties()
   let remote: any[] | null = null
-  if (session.connected.value) remote = await backendFetchParties()
+  try {
+    remote = await backendFetchParties() // 后端团优先（跨浏览器共享）；失败/为空退回本地
+  } catch (e) {
+    /* 忽略 */
+  }
   if (remote && remote.length) parties.value = remote.map(toParty)
   else parties.value = local
   if (!parties.value.length) {
@@ -165,14 +169,16 @@ async function ensureCardPool() {
   } catch (e) {
     /* 忽略 */
   }
-  if (session.connected.value) {
-    const remote = await backendFetchAll()
+  try {
+    const remote = await backendFetchAll() // 后端角色卡（跨浏览器共享）
     if (Array.isArray(remote)) {
       remote.forEach((c: any) => {
         const n = normalizeCharacterCard(c)
         if (n && n.id) map.set(n.id, n)
       })
     }
+  } catch (e) {
+    /* 忽略 */
   }
   cardPool.value = [...map.values()]
 }
