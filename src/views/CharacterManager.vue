@@ -1254,8 +1254,8 @@ async function addSpellFromLibrary(sp: any) {
   delete copy.id
   delete copy.source
   if (mode.value === 'v2') {
-    const r = await backendCreateSpell(currentId.value, copy)
-    if (r && r.ok) {
+    const r: any = await backendCreateSpell(currentId.value, copy) // 成功返回法术对象 data（含 id）
+    if (r && (r.id || r.ok)) {
       ElMessage.success(`已加入 ${copy.name}`)
       await loadSpells(spellsPage.value)
     } else {
@@ -1282,8 +1282,8 @@ async function saveSpellEdit() {
   }
   if (mode.value === 'v2' && currentId.value) {
     if (spellIsNew.value) {
-      const r = await backendCreateSpell(currentId.value, sp)
-      if (!(r && r.ok)) {
+      const r: any = await backendCreateSpell(currentId.value, sp) // 成功返回法术对象 data（含 id）
+      if (!(r && (r.id || r.ok))) {
         await loadSpells(spellsPage.value).catch(() => {}) // 同“失败也刷新”原则
         if (r && r.error) ElMessage.error(r.error)
         else ElMessage.error('添加法术失败')
