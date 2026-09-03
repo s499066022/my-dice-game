@@ -22,8 +22,25 @@
 |---|---|---|---|
 | GET | `/api/characters` | — | `{"ok":true,"data":[<CharacterCard>...]}` |
 | POST | `/api/characters/sync` | `{"data":[<CharacterCard>...]}` | `{"ok":true,"count":N}` |
+| PATCH | `/api/characters/{id}` | `{"data":{<顶层字段子集>}}` | `{"ok":true}` |
 
 **CharacterCard**：不透明 JSON（id/name/能力/HP/武器/技能/法术…），后端存 `payload`(json)+`id`/`name`/`updated_at`。`sync` 覆盖式（事务内清空再写）。
+
+**分块增量（减小单次数据量）**：前端按"编辑选项卡"把卡的**顶层字段**分组，只提交发生变化的块：
+- `PATCH /api/characters/{id}` 的 `data` 为整卡顶层字段的子集；后端把它**浅合并**进 `payload`（数组/对象整块替换），卡结构不变，`GET /characters` 仍返回整卡。
+- id 不存在返回 404（前端自动整库 `sync` 补建一次后重试）。
+
+| 块 | CharacterCard 顶层字段 |
+|---|---|
+| `basic` 基础/属性 | name, playerName, race, background, alignment, classes, xp, proficiencyBonus, portraitUrl |
+| `combat` 战斗/资源 | hp, tempHp, hitDice, acBonus, initiativeBonus, initiativeAdvantage, speed, size, resistances, immunities, passivePerception, conditions, resources |
+| `skills` 技能 | skills, weaponsProficient, armorProficient, languages, tools |
+| `equipment` 武器/防具 | weapons, equipment, armor, shield |
+| `features` 特性/专长 | classFeatures, racialFeatures, feats, specialAbilities |
+| `spells` 法术 | spellAbility, spellDc, spellAttackBonus, spellSlots, spells |
+| `wealth` 财富/备注 | money, weightCapacity, note |
+
+> 合并建议：`$payload = array_merge($payload, $data)` 后写回（顶层浅合并即可）；若需要并发安全可对行加锁（lockForUpdate）。前端在探测到该端点失败时自动回退整库 `sync`，因此**新旧后端都兼容**。
 
 ## 3. 团（Party）
 | 方法 | 路径 | 请求体 | 返回 |

@@ -60,6 +60,10 @@ export async function backendFetchAll(): Promise<CharacterCard[] | null> {
   }
 }
 
+export async function backendPatchCard(id: string, data: any): Promise<any | null> {
+  return apiJson('PATCH', `/characters/${encodeURIComponent(id)}`, { data })
+}
+
 export async function backendReplaceAll(cards: CharacterCard[]): Promise<boolean> {
   try {
     const res = await fetch(charactersUrl('sync'), {
@@ -179,9 +183,11 @@ export async function apiJson(method: string, path: string, body?: any): Promise
     })
     const text = await res.text()
     try {
-      return text ? JSON.parse(text) : { ok: res.ok }
+      const j = text ? JSON.parse(text) : { ok: res.ok }
+      if (j && typeof j === 'object') j.httpStatus = res.status
+      return j
     } catch (e) {
-      return { ok: false, error: 'HTTP ' + res.status + ': ' + text.slice(0, 200) }
+      return { ok: false, error: 'HTTP ' + res.status + ': ' + text.slice(0, 200), httpStatus: res.status }
     }
   } catch (e) {
     console.error(`api ${method} ${path} 失败`, e)

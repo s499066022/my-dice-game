@@ -65,8 +65,8 @@
       </el-tag>
       <el-input v-model="backendUrlInput" size="small" placeholder="后端地址，如 http://localhost:12226/api" class="cm-be-input" />
       <el-button size="small" @click="testConnection">测试连接</el-button>
-      <el-button size="small" type="success" plain @click="pushToBackend(true)">
-        立即同步
+      <el-button size="small" type="success" plain title="将整库角色卡全量覆盖到后端（新建/导入后建议点一次）" @click="pushToBackendWhole(true)">
+        整卡同步
       </el-button>
       <span v-if="backendStatus.lastSync" class="cm-sync-time">上次同步 {{ backendStatus.lastSync }}</span>
     </div>
@@ -539,6 +539,7 @@ import {
   backendPing,
   backendFetchAll,
   backendReplaceAll,
+  backendPatchCard,
   getBackendBase,
   setBackendBase,
   useBackendStatus,
@@ -904,18 +905,134 @@ function localSave() {
 }
 
 // ========== 后端同步 ==========
+// 分块设计：每张卡的"编辑选项卡"对应一组顶层字段，编辑时只同步变更的块（减小单次数据量）。
+// 后端需支持 PATCH /characters/{id}（顶层字段浅合并进 payload JSON）；未支持时自动回退整库覆盖。
+const CARD_BLOCKS: Record<string, string[]> = {
+  basic: ['name', 'playerName', 'race', 'background', 'alignment', 'classes', 'xp', 'proficiencyBonus', 'portraitUrl'],
+  combat: ['hp', 'tempHp', 'hitDice', 'acBonus', 'initiativeBonus', 'initiativeAdvantage', 'speed', 'size', 'resistances', 'immunities', 'passivePerception', 'conditions', 'resources'],
+  skills: ['skills', 'weaponsProficient', 'armorProficient', 'languages', 'tools'],
+  equipment: ['weapons', 'equipment', 'armor', 'shield'],
+  features: ['classFeatures', 'racialFeatures', 'feats', 'specialAbilities'],
+  spells: ['spellAbility', 'spellDc', 'spellAttackBonus', 'spellSlots', 'spells'],
+  wealth: ['money', 'weightCapacity', 'note'],
+}
+const BLOCK_OF_KEY: Record<string, string> = {}
+Object.entries(CARD_BLOCKS).forEach(([b, keys]) => keys.forEach((k) => (BLOCK_OF_KEY[k] = b)))
+
 let syncTimer: ReturnType<typeof setTimeout> | null = null
 let hydrating = false
+// granular: 0=未探测 1=后端支持单卡分块 2=不支持(每次回退整库)
+let granular = 0
+let wholePending = false
+const pendingBlocks = new Map<string, Set<string>>()
 
-function scheduleSync() {
-  if (hydrating) return
-  localSave()
-  if (backendStatus.value.status !== 'online') return
-  if (syncTimer) clearTimeout(syncTimer)
-  syncTimer = setTimeout(() => pushToBackend(), 800)
+function changedBlocks(oldCard: any, newCard: any): Set<string> {
+  const set = new Set<string>()
+  Object.keys(BLOCK_OF_KEY).forEach((key) => {
+    if (JSON.stringify(oldCard?.[key]) !== JSON.stringify(newCard?.[key])) set.add(BLOCK_OF_KEY[key])
+  })
+  return set
 }
 
-async function pushToBackend(force = false) {
+function markSynced() {
+  backendStatus.value.status = 'online'
+  backendStatus.value.lastSync = new Date().toLocaleTimeString()
+  backendStatus.value.error = null
+}
+
+// Vue deep watch 的 oldValue 与被观察对象同引用，无法拿"变更前"对比；
+// 这里自维护上一份 JSON 快照，用字符串 diff 找出变更块。
+let cardsSnap = '[]'
+
+function snapshotIdMap(json: string): Map<string, string> {
+  const map = new Map<string, string>()
+  try {
+    const arr = JSON.parse(json)
+    if (Array.isArray(arr)) arr.forEach((c: any) => c && c.id && map.set(String(c.id), JSON.stringify(c)))
+  } catch (e) {
+    /* 忽略 */
+  }
+  return map
+}
+
+function scheduleSync(nv: CharacterCard[]) {
+  if (hydrating) return
+  localSave()
+  const now = JSON.stringify(nv)
+  const prevMap = snapshotIdMap(cardsSnap)
+  const nowMap = snapshotIdMap(now)
+  const prevIds = new Set(prevMap.keys())
+  // 结构性变化（新增/删除卡）：整库覆盖一次兜底
+  if (nv.length !== prevIds.size || nv.some((c) => !prevIds.has(c.id))) {
+    wholePending = true
+  } else {
+    nv.forEach((card) => {
+      const oldJson = prevMap.get(card.id)
+      if (!oldJson || oldJson === JSON.stringify(card)) return
+      const blocks = changedBlocks(JSON.parse(oldJson), card)
+      if (!blocks.size) return
+      const set = pendingBlocks.get(card.id) || new Set<string>()
+      blocks.forEach((b) => set.add(b))
+      pendingBlocks.set(card.id, set)
+    })
+  }
+  cardsSnap = now
+  if (backendStatus.value.status !== 'online') return
+  if (syncTimer) clearTimeout(syncTimer)
+  syncTimer = setTimeout(() => flushSync(), 800)
+}
+
+async function flushSync() {
+  if (backendStatus.value.status !== 'online') return
+  if (wholePending) {
+    wholePending = false
+    pendingBlocks.clear()
+    await pushToBackendWhole(true, true)
+    return
+  }
+  if (!pendingBlocks.size) return
+  const batch = [...pendingBlocks.entries()]
+  pendingBlocks.clear()
+  if (granular === 2) {
+    await pushToBackendWhole(true, true)
+    return
+  }
+  let usedWholeFallback = false
+  outer: for (const [id, blocks] of batch) {
+    const card = cards.value.find((c) => c.id === id)
+    if (!card) continue
+    for (const b of blocks) {
+      const keys = CARD_BLOCKS[b] || []
+      const data: any = {}
+      keys.forEach((k) => {
+        if (k in card) data[k] = (card as any)[k]
+      })
+      let r = await backendPatchCard(id, data)
+      if (r && r.ok === true) {
+        granular = 1
+        markSynced()
+        continue
+      }
+      // 失败：先整库覆盖一次（补上新建/恢复的卡），再重试一次 PATCH 判断端点是否可用
+      if (!usedWholeFallback) {
+        usedWholeFallback = true
+        await pushToBackendWhole(true, true)
+      }
+      r = await backendPatchCard(id, data)
+      if (r && r.ok === true) {
+        granular = 1
+        markSynced()
+        continue
+      }
+      granular = 2
+      // 上面已做过一次整库覆盖兜底（内容已上传），无需再推一次
+      break outer
+    }
+  }
+}
+
+// 整库覆盖（按钮「整卡同步」/ 新建/导入/删除/回退路径）
+async function pushToBackendWhole(force = false, silent = false) {
   // 非主动且当前离线时，先尝试重新探测连接
   if (backendStatus.value.status !== 'online') {
     if (!force) {
@@ -927,7 +1044,7 @@ async function pushToBackend(force = false) {
     backendStatus.value.checking = false
     if (!ok) {
       backendStatus.value.status = 'offline'
-      ElMessage.warning('后端离线，已保存到本地')
+      if (!silent) ElMessage.warning('后端离线，已保存到本地')
       return
     }
     backendStatus.value.status = 'online'
@@ -941,13 +1058,11 @@ async function pushToBackend(force = false) {
   const ok = await backendReplaceAll(toSend)
   backendStatus.value.checking = false
   if (ok) {
-    backendStatus.value.status = 'online'
-    backendStatus.value.lastSync = new Date().toLocaleTimeString()
-    backendStatus.value.error = null
+    markSynced()
   } else {
     backendStatus.value.status = 'offline'
     backendStatus.value.error = '写入后端失败，已保留在本地'
-    ElMessage.error('写入后端失败，已保留在本地')
+    if (!silent) ElMessage.error('写入后端失败，已保留在本地')
   }
 }
 
@@ -1025,6 +1140,7 @@ async function init() {
   currentId.value = cur && cards.value.some((c) => c.id === cur) ? cur : (cards.value[0]?.id ?? '')
   maybeSeedSamples()
   hydrating = false
+  cardsSnap = JSON.stringify(cards.value)
   localSave()
 }
 
@@ -1070,7 +1186,7 @@ function addSampleCharacters() {
   ElMessage.success(`已添加示例角色：${pick.className} ${pick.level}级`)
 }
 
-watch(cards, scheduleSync, { deep: true })
+watch(cards, (nv) => scheduleSync(nv), { deep: true })
 watch(currentId, localSave)
 
 onMounted(() => {
