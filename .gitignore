@@ -25,3 +25,8 @@ dist-ssr
 
 # 部署构建产物
 *.tar.gz
+
+# 法术库原始 xlsx（已转换进 src/data/spellLibrary.json）
+m.xlsx
+
+.npm-cache/

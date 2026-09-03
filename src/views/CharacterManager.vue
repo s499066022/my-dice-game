@@ -450,6 +450,12 @@
               </div>
               <div class="cm-panel cm-panel-wide">
                 <h4>法术列表（按环位排列）</h4>
+                <!-- 法术库：从库挑选（像选武器） / 管理（自定义入库） -->
+                <div class="cm-libbar">
+                  <el-button size="small" type="primary" plain @click="spellPickerOpen = true">📚 从法术库选择</el-button>
+                  <el-button size="small" plain @click="spellLibManageOpen = true">🗂 管理法术库</el-button>
+                  <span class="cm-libtip">可自定义添加法术进库，之后任意角色卡都能直接挑选</span>
+                </div>
                 <!-- 固定环位筛选：0-9 环 / 全部 -->
                 <div class="cm-spell-levels">
                   <button :class="{ on: spellsLevel === null }" @click="onSpellLevel(null)">全部</button>
@@ -550,6 +556,10 @@
         </el-tabs>
       </section>
     </div>
+
+    <!-- 法术库：选择/管理 -->
+    <SpellLibraryDialog :open="spellPickerOpen" mode="pick" @close="spellPickerOpen = false" @pick="addSpellFromLibrary" />
+    <SpellLibraryDialog :open="spellLibManageOpen" mode="manage" @close="spellLibManageOpen = false" />
   </div>
 </template>
 
@@ -560,6 +570,7 @@ import AbilityPanel from '../components/character/AbilityPanel.vue'
 import SkillPanel from '../components/character/SkillPanel.vue'
 import ResourceList from '../components/character/ResourceList.vue'
 import FeatureList from '../components/character/FeatureList.vue'
+import SpellLibraryDialog from '../components/character/SpellLibraryDialog.vue'
 import type { CharacterCard } from '../data/dndModel'
 import {
   createEmptyCard,
@@ -1233,6 +1244,29 @@ function onSpellSearch() {
 function onSpellPage(p: number) {
   loadSpells(p)
 }
+const spellPickerOpen = ref(false)
+const spellLibManageOpen = ref(false)
+
+// 从法术库挑选 -> 加入当前角色（副本剥离库专用 id/source，避免跨卡 id 冲突）
+async function addSpellFromLibrary(sp: any) {
+  if (!sp || !currentId.value) return
+  const copy: any = { ...sp }
+  delete copy.id
+  delete copy.source
+  if (mode.value === 'v2') {
+    const r = await backendCreateSpell(currentId.value, copy)
+    if (r && r.ok) {
+      ElMessage.success(`已加入 ${copy.name}`)
+      await loadSpells(spellsPage.value)
+    } else {
+      ElMessage.error('添加失败：' + (r?.error || '未知'))
+    }
+  } else {
+    currentCard.value?.spells?.push({ ...copy, id: uid() })
+    ElMessage.success(`已加入 ${copy.name}`)
+  }
+}
+
 function addSpellV2() {
   spellEditTarget.value = { id: '', status: '已准备', level: spellsLevel.value ?? 0, school: '', ritual: false, name: '', castingTime: '', range: '', duration: '', v: false, s: false, m: false, material: '', effect: '' } as unknown as Spell
   spellIsNew.value = true
@@ -1922,6 +1956,17 @@ onMounted(() => {
 .cm-spell-form .el-input {
   flex: 1;
   min-width: 120px;
+}
+.cm-libbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 0 6px;
+  flex-wrap: wrap;
+}
+.cm-libtip {
+  color: #9ca3af;
+  font-size: 12px;
 }
 .cm-spell-levels {
   display: flex;
