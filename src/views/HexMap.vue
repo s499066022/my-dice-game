@@ -76,17 +76,12 @@
             <button class="tp-btn" @click="clearCircle">清除</button>
           </div>
           <div v-else-if="tool === 'rect'" class="tp-fields">
-            <span class="tp-tip">宽</span>
-            <el-input-number v-model="rectW" :min="5" :max="200" :step="5" size="small" style="width: 84px" />
-            <span class="tp-tip">长</span>
-            <el-input-number v-model="rectH" :min="5" :max="300" :step="5" size="small" style="width: 84px" />
-            <span class="tp-tip">角°</span>
-            <el-input-number v-model="rectAngle" :min="0" :max="360" size="small" style="width: 76px" />
+            <span class="tp-tip">{{ rectStart ? '再点对角顶点完成' : '先点第一个角' }}</span>
             <el-select v-model="spellBind" size="small" style="width: 104px" placeholder="绑定参战者">
               <el-option value="" label="不绑定" />
               <el-option v-for="t in session.combatants" :key="t.id" :value="t.id" :label="t.name || '角色'" />
             </el-select>
-            <span class="tp-tip">点中心放置（长沿角度方向）</span>
+            <button class="tp-btn" @click="clearRect">清除</button>
           </div>
 
           <!-- 会话参战者（可拖拽） -->
@@ -170,9 +165,7 @@ const measureData = ref('')
 const coneStart = ref<Hex | null>(null)
 const coneFt = ref(30)
 const circleFt = ref(20)
-const rectW = ref(20) // 矩形宽（尺）
-const rectH = ref(30) // 矩形长（尺）
-const rectAngle = ref(0) // 矩形角度（度）
+const rectStart = ref<Hex | null>(null) // 矩形第一角（对角顶点 1）
 const spellBind = ref('') // 绑定到某个参战者
 
 let dragCmbId: string | null = null
@@ -262,6 +255,18 @@ function drawMap() {
     else if (area.type === 'rect') drawRectShape(origin, area.widthFt || 10, area.heightFt || 10, area.angle || 0)
     else drawConeShape(origin, area.angle, area.ft)
   })
+
+  // 矩形预览：第一角 -> 鼠标位置（对角预览）
+  if (tool.value === 'rect' && rectStart.value && hoverPos.value) {
+    const A = worldPos(rectStart.value)
+    const B = worldPos(hoverPos.value)
+    const cx = (A.x + B.x) / 2
+    const cy = (A.y + B.y) / 2
+    const pc = worldToHexPx(cx, cy)
+    const wFt = Math.max(5, Math.round((Math.abs(B.x - A.x) / HEX_SIZE) * HEX_FT))
+    const hFt = Math.max(5, Math.round((Math.abs(B.y - A.y) / HEX_SIZE) * HEX_FT))
+    drawRectShape(pc, wFt, hFt, 0, true)
+  }
 
   if (measureStart.value) {
     const a = hexToScreen(measureStart.value.q, measureStart.value.r)
@@ -470,17 +475,38 @@ function commitCone(start: Hex, dir: Hex) {
 function commitCircle(center: Hex) {
   session.addSpellArea({ type: 'circle', q: center.q, r: center.r, angle: 0, ft: circleFt.value, boundTo: spellBind.value || null })
 }
-function commitRect(center: Hex) {
+// 以两个对角顶点构造轴对齐矩形：世界坐标求中心与宽高，再换算为中心格 + 宽×高（尺）
+function worldPos(h: Hex) {
+  return gridPixel(h.q, h.r, HEX_SIZE) // 基础缩放下的世界坐标（不含 zoom/pan）
+}
+function worldToHexPx(wx: number, wy: number): Hex {
+  const sz = HEX_SIZE
+  const q = ((2 / 3) * wx) / sz
+  const rr = ((-1 / 3) * wx + (Math.sqrt(3) / 3) * wy) / sz
+  return hexRound(q, rr)
+}
+function commitRect(a: Hex, b: Hex) {
+  const A = worldPos(a)
+  const B = worldPos(b)
+  const cx = (A.x + B.x) / 2
+  const cy = (A.y + B.y) / 2
+  const center = worldToHexPx(cx, cy)
+  const cellW = Math.abs(B.x - A.x) / HEX_SIZE
+  const cellH = Math.abs(B.y - A.y) / HEX_SIZE
   session.addSpellArea({
     type: 'rect',
     q: center.q,
     r: center.r,
-    angle: (rectAngle.value * Math.PI) / 180,
+    angle: 0,
     ft: 0,
-    widthFt: rectW.value,
-    heightFt: rectH.value,
+    widthFt: Math.max(5, Math.round(cellW * HEX_FT)),
+    heightFt: Math.max(5, Math.round(cellH * HEX_FT)),
     boundTo: spellBind.value || null,
   })
+}
+function clearRect() {
+  rectStart.value = null
+  drawMap()
 }
 function drawRectShape(origin: Hex, wFt: number, hFt: number, angleRad: number, isPreview = false) {
   if (!ctx) return
@@ -629,7 +655,13 @@ function onMouseUp(e: MouseEvent) {
   } else if (tool.value === 'circle') {
     if (hex) commitCircle(hex)
   } else if (tool.value === 'rect') {
-    if (hex) commitRect(hex)
+    if (!hex) return
+    if (!rectStart.value) {
+      rectStart.value = hex
+    } else {
+      commitRect(rectStart.value, hex)
+      rectStart.value = null
+    }
   }
   dragCmbId = null
   drawMap()

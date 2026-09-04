@@ -171,7 +171,8 @@
   怪物 payload 供将来图鉴，控制 < ~6KB。
 - **并发去重建议**：`combatants(session_id, ref_id)` 唯一索引 + sync/store 事务行锁（当前未加索引，极端并发下可能重复，可加）。
 
-**SpellArea**：`{"id":"...","type":"cone|circle|rect","q":3,"r":-1,"angle":0.6,"ft":30,"width_ft":null,"height_ft":null,"bound_to":"c1"}`（bound_to 跟随移动）。`rect` 用 width_ft×height_ft(尺) + angle(弧度) 描述，ft 置 0。
+**SpellArea**：`{"id":"...","type":"cone|circle|rect","q":3,"r":-1,"angle":0.6,"ft":30,"width_ft":null,"height_ft":null,"bound_to":"c1"}`（bound_to 跟随移动）。
+`rect` 由用户点选两个对角顶点生成：服务端存为中心格(q,r) + width_ft×height_ft(尺) + angle(0=轴对齐)，前端两角的世界跨距换算为宽高，方向随两点确定。
 
 ---
 
