@@ -170,6 +170,7 @@ onMounted(() => {
   window.addEventListener('resize', resizeCanvas)
   const canvas = canvasRef.value
   if (canvas) ctx = canvas.getContext('2d')
+  session.bindCardSource() // 角色卡(name/AC/体型) -> 会话参战者 只读跟随；会话 HP -> 卡 单独回写
   drawMap()
 })
 

@@ -11,8 +11,9 @@ import { reactive, ref, computed } from 'vue'
 import type { CharacterCard } from '../data/dndModel'
 import { getInitiativeTotal, getTotalAC } from '../data/dndModel'
 import { uid } from '../data/dndModel'
-import { connectReverb, leaveReverb } from '../api/reverb'
+import { connectReverb, leaveReverb, connectCharacterCards } from '../api/reverb'
 import {
+  backendPatchCardBlock,
   backendCombatSessionShow,
   backendCombatantsSync,
   backendCombatantAdd,
@@ -547,7 +548,10 @@ export function setHp(id: string, hp: { current?: number; max?: number }) {
   c.hp = { current: cur, max }
   saveLocal()
   drawNotifier.value++
-  if (connected.value) backendCombatantPatch(id, { hp: c.hp })
+  if (connected.value) {
+    backendCombatantPatch(id, { hp: c.hp })
+    pushHpToCard(c)
+  }
 }
 
 // HP（按差值扣/加）
@@ -557,7 +561,10 @@ export function hpCombatant(id: string, delta: number) {
   c.hp.current = Math.max(0, Math.min(c.hp.max, c.hp.current + delta))
   saveLocal()
   drawNotifier.value++
-  if (connected.value) backendCombatantPatch(id, { hp: c.hp })
+  if (connected.value) {
+    backendCombatantPatch(id, { hp: c.hp })
+    pushHpToCard(c)
+  }
 }
 
 // 行内编辑（颜色/优劣/HP/名字/AC/体型 等）整条 PATCH
@@ -698,6 +705,51 @@ export function updateSpellArea(id: string, fields: Partial<SpellArea>) {
   if (connected.value) backendSpellAreaUpdate(id, areaToApi(a))
 }
 
+// ========== 角色卡 -> 会话 单向只读同步（除 HP 外，会话不得反向改卡） ==========
+let cardSourceBound = false
+
+function pushHpToCard(c: Combatant) {
+  if (c.type === 'character' && c.refId && connected.value && sessionId.value) {
+    backendPatchCardBlock(c.refId, 'combat', { hp: { current: c.hp.current, max: c.hp.max } })
+  }
+}
+
+// 订阅 presence-characters：卡上 name/AC/体型 变化 -> 同步到同 ref_id 的参战者（只读跟随，绝不反向）
+export function bindCardSource() {
+  if (cardSourceBound) return
+  cardSourceBound = true
+  connectCharacterCards({
+    onCardUpdated: (id: string, block: string, data: any) => {
+      if (block !== 'combat' || !data) return
+      let touched = false
+      combatants.forEach((c) => {
+        if (c.type !== 'character' || !c.refId || c.refId !== id) return
+        const patch: any = {}
+        if (data.name !== undefined && String(data.name) !== String(c.name)) {
+          c.name = String(data.name)
+          patch.name = c.name
+        }
+        if (data.ac !== undefined && Number(data.ac) !== Number(c.ac)) {
+          c.ac = Number(data.ac)
+          patch.ac = c.ac
+        }
+        if (data.size !== undefined && Number(data.size) !== Number(c.size)) {
+          c.size = Number(data.size)
+          patch.size = c.size
+        }
+        if (Object.keys(patch).length && connected.value) {
+          touched = true
+          backendCombatantPatch(c.id, patch) // 让会话服务端/其它地图端也更新
+        }
+      })
+      if (touched) {
+        saveLocal()
+        drawNotifier.value++
+      }
+    },
+  })
+}
+
 // ========== 团成员对账（后端一次 sync / 离线本地） ==========
 export async function reconcileParty(cards: CharacterCard[]): Promise<void> {
   if (connected.value && sessionId.value) {
@@ -793,6 +845,7 @@ export function useCombatSession() {
     addSpellArea,
     removeSpellArea,
     updateSpellArea,
+    bindCardSource,
     // persistence / reverb
     saveLocal,
     loadLocal,

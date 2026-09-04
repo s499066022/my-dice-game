@@ -564,7 +564,7 @@
 </template>
 
 <script lang="ts" setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import AbilityPanel from '../components/character/AbilityPanel.vue'
 import SkillPanel from '../components/character/SkillPanel.vue'
@@ -1013,12 +1013,15 @@ let hydrating = false
 // granular: 0=未探测 1=后端支持单卡分块 2=不支持(每次回退整库)
 let granular = 0
 let initUploadNeeded = false
+let cardChannelOff: (() => void) | null = null
 let wholePending = false
 const pendingBlocks = new Map<string, Set<CardBlock>>()
+const namePending = new Set<string>() // 改名走最小 PATCH {name}，绝不随战斗编辑整块携带 name
 
 function changedBlocks(oldCard: any, newCard: any): Set<CardBlock> {
   const set = new Set<CardBlock>()
   Object.keys(BLOCK_OF_KEY).forEach((key) => {
+    if (key === 'name') return // name 单独通道
     if (JSON.stringify(oldCard?.[key]) !== JSON.stringify(newCard?.[key])) set.add(BLOCK_OF_KEY[key])
   })
   return set
@@ -1069,7 +1072,9 @@ function scheduleSync(nv: CharacterCard[]) {
     nv.forEach((card) => {
       const oldJson = prevMap.get(card.id)
       if (!oldJson || oldJson === JSON.stringify(card)) return
-      const blocks = changedBlocks(JSON.parse(oldJson), card)
+      const oldCard = JSON.parse(oldJson)
+      if (String(oldCard?.name ?? '') !== String(card.name ?? '')) namePending.add(card.id)
+      const blocks = changedBlocks(oldCard, card)
       if (!blocks.size) return
       const set = pendingBlocks.get(card.id) || new Set<CardBlock>()
       blocks.forEach((b) => set.add(b))
@@ -1098,12 +1103,30 @@ async function flushSync() {
     await pushToBackendWhole(true, true)
     return
   }
+  // 改名：单独最小 PATCH {name}（后端浅合并），避免“旧 name 随战斗编辑反向广播覆盖”
+  if (namePending.size) {
+    const names = [...namePending]
+    namePending.clear()
+    for (const id of names) {
+      const card = cards.value.find((c) => c.id === id)
+      if (!card || card.name === undefined) continue
+      const r = await backendPatchCardBlock(id, 'combat', { name: card.name })
+      if (r && r.ok === true) {
+        granular = 1
+        markSynced()
+      } else {
+        await pushToBackendWhole(true, true)
+        granular = 2
+      }
+    }
+  }
   let usedWholeFallback = false
   outer: for (const [id, blocks] of batch) {
     const card = cards.value.find((c) => c.id === id)
     if (!card) continue
     for (const b of blocks) {
       const data = pickBlock(card, b)
+      delete data.name // name 已走独立通道
       if (!Object.keys(data).length) continue
       let r = await backendPatchCardBlock(id, b, data)
       if (r && r.ok === true) {
@@ -1371,7 +1394,7 @@ function onCardRealtimeRemoved(id: string) {
   cardsSnap = JSON.stringify(cards.value)
 }
 function watchCardsRealtime() {
-  return connectCharacterCards({
+  cardChannelOff = connectCharacterCards({
     onCardUpdated: onCardRealtimeUpdated,
     onCardRemoved: onCardRealtimeRemoved,
     onSpellUpdated: (cardId, spell) => {
@@ -1590,6 +1613,12 @@ watch([activeTab, currentId], () => maybeLoadTab())
 
 onMounted(() => {
   init()
+})
+onUnmounted(() => {
+  if (cardChannelOff) {
+    cardChannelOff()
+    cardChannelOff = null
+  }
 })
 </script>
 

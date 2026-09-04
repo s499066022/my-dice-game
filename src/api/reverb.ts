@@ -184,13 +184,27 @@ export interface CharacterCardHandlers {
 }
 
 let cardsChannel: any = null
+const cardHandlers = new Set<CharacterCardHandlers>()
 
-// 订阅 presence-characters；返回是否成功
-export function connectCharacterCards(handlers: CharacterCardHandlers): boolean {
+function notifyCardHandlers(kind: 'updated' | 'removed' | 'spell', a: any, b?: any) {
+  cardHandlers.forEach((h) => {
+    try {
+      if (kind === 'updated') h.onCardUpdated?.(a.id, a.block, a.data ?? {})
+      else if (kind === 'removed') h.onCardRemoved?.(a.id)
+      else h.onSpellUpdated?.(a, b)
+    } catch (e) {
+      /* 单个订阅者出错不影响其它 */
+    }
+  })
+}
+
+// 订阅 presence-characters（支持多页面/多用途同时订阅；返回取消函数）
+export function connectCharacterCards(handlers: CharacterCardHandlers): () => void {
+  cardHandlers.add(handlers)
   const echo: any = (window as any).Echo
   if (!echo || !echo.join) {
     handlers.onOnline?.(false)
-    return false
+    return () => cardHandlers.delete(handlers)
   }
   try {
     if (!cardsChannel) {
@@ -199,31 +213,31 @@ export function connectCharacterCards(handlers: CharacterCardHandlers): boolean 
       cardsChannel.listen('.CharacterCardUpdated', (e: any) => {
         const d = e?.data ?? e
         logWs('in', 'presence-characters', '.CharacterCardUpdated', summarize(d))
-        handlers.onCardUpdated?.(d?.id, d?.block, d?.data ?? {})
+        notifyCardHandlers('updated', d)
       })
       cardsChannel.listen('.CharacterCardRemoved', (e: any) => {
         const d = e?.data ?? e
         logWs('in', 'presence-characters', '.CharacterCardRemoved', summarize(d))
-        handlers.onCardRemoved?.(d?.id)
+        notifyCardHandlers('removed', d)
       })
       cardsChannel.listen('.SpellUpdated', (e: any) => {
         const d = e?.data ?? e
         logWs('in', 'presence-characters', '.SpellUpdated', summarize(d))
-        handlers.onSpellUpdated?.(d?.card_id, d?.spell)
+        notifyCardHandlers('spell', d?.card_id, d?.spell)
       })
       cardsChannel.here(() => {
         logWs('sys', 'presence-characters', '订阅成功（在线成员）')
-        handlers.onOnline?.(true)
+        cardHandlers.forEach((h) => h.onOnline?.(true))
       })
       cardsChannel.error?.(() => {
         logWs('err', 'presence-characters', '订阅失败')
-        handlers.onOnline?.(false)
+        cardHandlers.forEach((h) => h.onOnline?.(false))
       })
     }
-    return true
+    return () => cardHandlers.delete(handlers)
   } catch (e) {
     console.error('订阅角色卡频道失败', e)
     handlers.onOnline?.(false)
-    return false
+    return () => cardHandlers.delete(handlers)
   }
 }
