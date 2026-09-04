@@ -1047,13 +1047,19 @@ function snapshotIdMap(json: string): Map<string, string> {
 
 function scheduleSync(nv: CharacterCard[]) {
   if (hydrating) return
+  const prevMap = snapshotIdMap(cardsSnap)
   const nowIso = new Date().toISOString()
+  // 发生变化的卡刷新 updatedAt（否则合并时会把“服务端上传过的旧版本”误判为较新，覆盖本地刚改的名字/数据）
   nv.forEach((c) => {
-    if (!c.updatedAt) c.updatedAt = nowIso
+    if (!c.updatedAt) {
+      c.updatedAt = nowIso
+    } else {
+      const prevJson = prevMap.get(c.id)
+      if (prevJson !== undefined && prevJson !== JSON.stringify(c)) c.updatedAt = nowIso
+    }
   })
   localSave()
   const now = JSON.stringify(nv)
-  const prevMap = snapshotIdMap(cardsSnap)
   const nowMap = snapshotIdMap(now)
   const prevIds = new Set(prevMap.keys())
   // 结构性变化（新增/删除卡）：整库覆盖一次兜底
