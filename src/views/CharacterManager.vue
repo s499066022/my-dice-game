@@ -1147,14 +1147,30 @@ async function pushToBackendWhole(force = false, silent = false) {
     classes: (c.classes || []).filter((cl) => (cl.name && cl.name.trim()) || cl.level !== 1),
   }))
   if (mode.value === 'v2') {
-    // v2 下本地卡可能是"轻量 + 懒加载"的部分数据；整库覆盖前用远端整卡打底，避免覆盖丢失未加载块
+    // 整库覆盖必须“按已加载块合并”，否则本地未加载块的默认值会覆盖服务端真实数据。
+    // 规则：以服务端整卡为底；本地已加载(blockLoaded)的块用本地值覆盖；combat 恒用本地；其余保留服务端。
     try {
       const remote = await backendFetchAll()
       if (Array.isArray(remote) && remote.length) {
         const byId = new Map(remote.map((r: any) => [r.id, r]))
         toSend = toSend.map((c) => {
           const r = byId.get(c.id)
-          return r ? { ...r, ...c } : c
+          if (!r) return c // 本地新增卡：整卡上传（无服务端数据可冲突）
+          const out: any = JSON.parse(JSON.stringify(r))
+          const loaded = blockLoaded.get(c.id)
+          const applyBlock = (blk: string) => {
+            ;(CARD_BLOCKS[blk as CardBlock] || []).forEach((k) => {
+              if (k in c) out[k] = (c as any)[k]
+            })
+          }
+          if (!loaded) {
+            applyBlock('combat') // 未知：至少同步战斗核心（含 name/hp/AC/先攻）
+          } else {
+            ;(CARD_BLOCKS_KEYS_ALL as string[]).forEach((blk) => {
+              if (loaded.has(blk as CardBlock)) applyBlock(blk)
+            })
+          }
+          return out
         })
       }
     } catch (e) {

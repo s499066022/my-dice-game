@@ -228,3 +228,16 @@ curl -X PATCH http://localhost:12226/api/characters/{id}/blocks/combat -H 'Conte
      -d '{"data":{"hp":{"current":90,"max":115}}}'
 curl "http://localhost:12226/api/characters/{id}/spells?page=1&per_page=20&level=3&q=火球"
 ```
+
+## 10. 遗留接口与共存注意事项（审计结论）
+
+| 接口 | 状态 | 冲突点与处置 |
+|---|---|---|
+| GET/POST `/characters`、`/characters/sync` | 兼容保留（导出/迁移/离线兜底） | **与块级 PATCH 并存时可能互相覆盖**：sync 是整库 delete+insert。前端已做“块级安全合并”（以服务端整卡为底，仅用本地**已加载块**覆盖，其余块保留服务端），并把 sync 限制在迁移/导入/本地较新时。仍属 last-write-wins：请勿多个设备同时整卡同步。 |
+| `characters/sync` 无广播 | 已知边界 | 整库覆盖后其它在线端不会实时刷新（无事件）。日常编辑请走 blocks/spells；确需整卡同步后，其它端刷新或等下次块广播。 |
+| 旧 `payload.spells` 与新 `character_spells` | 双轨 | `sync` 会幂等抽离：该卡已有法术行则只清空 payload.spells；无行则按 id/生成 id 插入。老数据建议在任一设备点一次“整卡同步”完成抽离。 |
+| DELETE `/characters/{id}` | v2 | 连带删 character_spells；**不级联**清理 party.member_ids——团里会留下失效 id，地图对账会按 ref_id 自动忽略，团页显示时前端跳过。 |
+| `/map`、`/initiative` | 兼容保留 | 地图主流程已不用 `/map`；`/initiative` 仍被先攻骰页(暂不维护)使用，与战斗会话内“行动顺序”是两套独立数据，无表冲突。 |
+| 路由顺序 | 无冲突 | `/characters/sync|light` 等字面段均先于 `{id}` 变段注册；无捕获歧义。 |
+
+> 关键约定：**日常编辑走块/单条接口；整库 `sync` 只用于迁移/导入/兜底**（前端已限制触发场景）。
