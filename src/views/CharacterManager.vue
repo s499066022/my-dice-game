@@ -738,6 +738,7 @@ const statusLabel = computed(() => {
 function addCard() {
   const card = createEmptyCard(`新角色 ${cards.value.length + 1}`)
   card.id = uid()
+  card.updatedAt = new Date().toISOString()
   markCardFull(card.id)
   cards.value.push(card)
   currentId.value = card.id
@@ -1011,6 +1012,7 @@ let syncTimer: ReturnType<typeof setTimeout> | null = null
 let hydrating = false
 // granular: 0=未探测 1=后端支持单卡分块 2=不支持(每次回退整库)
 let granular = 0
+let initUploadNeeded = false
 let wholePending = false
 const pendingBlocks = new Map<string, Set<CardBlock>>()
 
@@ -1045,6 +1047,10 @@ function snapshotIdMap(json: string): Map<string, string> {
 
 function scheduleSync(nv: CharacterCard[]) {
   if (hydrating) return
+  const nowIso = new Date().toISOString()
+  nv.forEach((c) => {
+    if (!c.updatedAt) c.updatedAt = nowIso
+  })
   localSave()
   const now = JSON.stringify(nv)
   const prevMap = snapshotIdMap(cardsSnap)
@@ -1410,9 +1416,42 @@ async function init() {
     const light = await backendFetchLightCharacters()
     if (light && light.length) {
       mode.value = 'v2'
-      cards.value = light.map(lightToCard)
+      const localCards = loadLocalCards()
+      const localById = new Map(localCards.map((c) => [c.id, c]))
+      const merged: CharacterCard[] = []
+      let uploadNeeded = false
+      light.forEach((r: any) => {
+        const l = localById.get(r.id)
+        if (!l) {
+          merged.push(lightToCard(r)) // 服务端新卡 -> light 进入
+          return
+        }
+        // 本地缓存卡存在：保留本地已加载的块/离线改动
+        const lr = new Date(l.updatedAt || 0).getTime()
+        const rr = new Date(r.updatedAt || '').getTime() || 0
+        if (rr > lr) {
+          // 服务端较新：combat 以服务端为准，其余块保留本地缓存（随后续懒加载/广播更新）
+          const base = normalizeCharacterCard({ ...l })!
+          ;(CARD_BLOCKS.combat || []).forEach((k) => {
+            if (r[k] !== undefined) (base as any)[k] = r[k]
+          })
+          merged.push(base)
+        } else {
+          // 本地较新/相同：保留本地（含离线期间的编辑），并触发一次上传把差异推到服务端
+          merged.push(normalizeCharacterCard({ ...l })!)
+          if (lr > rr) uploadNeeded = true
+        }
+      })
+      // 本地有、服务端没有的卡（离线新建/未上传）也要保留并上传
+      light.forEach((r: any) => localById.delete(r.id))
+      localById.forEach((c) => {
+        merged.push(normalizeCharacterCard({ ...c })!)
+        uploadNeeded = true
+      })
+      cards.value = merged
       blockLoaded.clear()
       cards.value.forEach((c) => blockLoaded.set(c.id, new Set<CardBlock>(['combat'])))
+      initUploadNeeded = uploadNeeded
     } else {
       mode.value = 'legacy'
       granular = 2
@@ -1441,6 +1480,28 @@ async function init() {
     watchCardsRealtime()
   }
   maybeLoadTab()
+  if (mode.value === 'v2' && backendStatus.value.status === 'online' && initUploadNeeded) {
+    initUploadNeeded = false
+    try {
+      await pushToBackendWhole(true, true) // 把本地较新/离线新建的差异推给服务端
+    } catch (e) {
+      /* 忽略 */
+    }
+  }
+}
+
+// 纯读取本地缓存的整卡列表（不改变 cards）
+function loadLocalCards(): CharacterCard[] {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY)
+    if (saved) {
+      const parsed = JSON.parse(saved)
+      return Array.isArray(parsed) ? parsed.map(normalizeCharacterCard).filter((c): c is NormalizedCard => c !== null) : []
+    }
+  } catch (e) {
+    console.error('读取角色卡失败', e)
+  }
+  return []
 }
 
 function loadLocal() {
