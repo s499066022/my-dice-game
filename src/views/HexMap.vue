@@ -165,9 +165,11 @@ const measureData = ref('')
 const coneStart = ref<Hex | null>(null)
 const coneFt = ref(30)
 const circleFt = ref(20)
-const rectA = ref<Hex | null>(null) // 第 1 点：矩形角（固定锚点）
-const rectB = ref<Hex | null>(null) // 第 2 点：定方向与长度
-// 第 3 点（hover 实时）决定宽度；完成时以第三点击为准
+// 矩形三点：坐标级世界像素（不受格吸附，最小 1 尺）
+type WPoint = { x: number; y: number }
+const rectA = ref<WPoint | null>(null) // 第 1 点：矩形角（固定锚点）
+const rectB = ref<WPoint | null>(null) // 第 2 点：定方向与长度
+const hoverW = ref<WPoint | null>(null) // 鼠标世界坐标（预览用）
 const spellBind = ref('') // 绑定到某个参战者
 
 let dragCmbId: string | null = null
@@ -275,21 +277,21 @@ function drawMap() {
     drawConeShape(coneStart.value, Math.atan2(b.y - a.y, b.x - a.x), coneFt.value, true)
   }
 
-  // 矩形三点预览：第 1 点固定显示；第 2 点后实时预览（C=鼠标）
+  // 矩形三点预览：第 1 点固定显示；第 2 点后实时预览（C=鼠标世界坐标，平滑 1 尺）
   if (tool.value === 'rect' && rectA.value) {
-    const pa = hexToScreen(rectA.value.q, rectA.value.r)
+    const pa = screenOfWorld(rectA.value)
     drawAnchor(pa, '1')
-    if (hoverPos.value) {
+    const pc = hoverW.value
+    if (pc) {
       if (rectB.value) {
-        const r3 = rectFrom3(rectA.value, rectB.value, hoverPos.value)
+        const r3 = rectFromWorld(rectA.value, rectB.value, pc)
         if (r3) {
           drawRectShape({ q: r3.q, r: r3.r }, r3.widthFt, r3.heightFt, r3.angle, true)
-          const pb = hexToScreen(rectB.value.q, rectB.value.r)
-          drawAnchor(pb, '2')
+          drawAnchor(screenOfWorld(rectB.value), '2')
         }
       } else {
         // 只定了第 1 点：画边线到鼠标
-        const pb = hexToScreen(hoverPos.value.q, hoverPos.value.r)
+        const pb = screenOfWorld(pc)
         ctx.beginPath()
         ctx.moveTo(pa.x, pa.y)
         ctx.lineTo(pb.x, pb.y)
@@ -300,6 +302,39 @@ function drawMap() {
         ctx.setLineDash([])
       }
     }
+  }
+  // 战斗会话：参战者（角色/怪物）
+  session.combatants.forEach((cmb) => {
+    const sp = hexToScreen(cmb.q, cmb.r)
+    drawToken(sp.x, sp.y, charRadius(cmb.size), cmb.color, cmb.name, false, cmb.id === session.currentCombatantId.value)
+  })
+  // 战斗会话：法术区域
+  session.spellAreas.forEach((area) => {
+    let origin = { q: area.q, r: area.r }
+    if (area.boundTo) {
+      const c = session.combatants.find((x) => x.id === area.boundTo)
+      if (c) origin = { q: c.q, r: c.r }
+    }
+    if (area.type === 'circle') drawCircleShape(origin, area.ft)
+    else if (area.type === 'rect') drawRectShape(origin, area.widthFt || 10, area.heightFt || 10, area.angle || 0)
+    else drawConeShape(origin, area.angle, area.ft)
+  })
+
+  if (measureStart.value) {
+    const a = hexToScreen(measureStart.value.q, measureStart.value.r)
+    const t = measureEnd.value || (tool.value === 'measure' ? hoverPos.value : null)
+    if (t) {
+      const b = hexToScreen(t.q, t.r)
+      const label = measureEnd.value ? measureData.value : measureDistance(measureStart.value, t) + '（预览）'
+      drawMeasureLine(a, b, label)
+    }
+  }
+
+  // 锥形放置预览（起点→方向）
+  if (tool.value === 'cone' && coneStart.value && hoverPos.value) {
+    const a = hexToScreen(coneStart.value.q, coneStart.value.r)
+    const b = hexToScreen(hoverPos.value.q, hoverPos.value.r)
+    drawConeShape(coneStart.value, Math.atan2(b.y - a.y, b.x - a.x), coneFt.value, true)
   }
 
   // 会话法术区域已在上面渲染（本地 indicators 不再使用，避免残留无法删除）
@@ -493,8 +528,12 @@ function commitCircle(center: Hex) {
   session.addSpellArea({ type: 'circle', q: center.q, r: center.r, angle: 0, ft: circleFt.value, boundTo: spellBind.value || null })
 }
 // 以两个对角顶点构造轴对齐矩形：世界坐标求中心与宽高，再换算为中心格 + 宽×高（尺）
-function worldPos(h: Hex) {
-  return gridPixel(h.q, h.r, HEX_SIZE) // 基础缩放下的世界坐标（不含 zoom/pan）
+// canvas 内像素 -> 世界坐标（基础 HEX_SIZE 尺度，浮点）
+function screenToWorld(sx: number, sy: number): WPoint {
+  return { x: (sx - pan.value.x) / zoom.value, y: (sy - pan.value.y) / zoom.value }
+}
+function screenOfWorld(w: WPoint) {
+  return { x: w.x * zoom.value + pan.value.x, y: w.y * zoom.value + pan.value.y }
 }
 function worldToHexPx(wx: number, wy: number): Hex {
   const sz = HEX_SIZE
@@ -502,31 +541,29 @@ function worldToHexPx(wx: number, wy: number): Hex {
   const rr = ((-1 / 3) * wx + (Math.sqrt(3) / 3) * wy) / sz
   return hexRound(q, rr)
 }
-// 三点构造旋转矩形：A=角点(固定) B=方向与长度 C=宽度
-// 几何：AB 为矩形底边（长=lengthFt、方向 angle），宽= C 到直线 AB 的距离，向 C 侧展开
-function rectFrom3(a: Hex, b: Hex, c: Hex): { q: number; r: number; angle: number; widthFt: number; heightFt: number } | null {
-  const A = worldPos(a)
-  const B = worldPos(b)
-  const C = worldPos(c)
-  const vx = B.x - A.x
-  const vy = B.y - A.y
+// 每尺世界像素 = 相邻六边形中心距(√3·HEX_SIZE) / 每格 5 尺
+const PX_PER_FT = (Math.sqrt(3) * HEX_SIZE) / HEX_FT
+
+// 三点（世界像素，A 固定角、B 定方向与长度、C 定宽度）-> 旋转矩形
+function rectFromWorld(a: WPoint, b: WPoint, c: WPoint): { q: number; r: number; angle: number; widthFt: number; heightFt: number } | null {
+  const vx = b.x - a.x
+  const vy = b.y - a.y
   const L = Math.hypot(vx, vy)
   if (L < 1e-6) return null
   const angle = Math.atan2(vy, vx)
-  const cross = vx * (C.y - A.y) - vy * (C.x - A.x)
+  const cross = vx * (c.y - a.y) - vy * (c.x - a.x)
   const h = Math.abs(cross) / L // 垂直距离（世界像素）
-  const s = cross >= 0 ? 1 : -1 // 向 C 侧
-  const pxPerFtBase = HEX_SIZE / HEX_FT
-  const lengthFt = Math.max(1, Math.round(L / pxPerFtBase))
-  const heightFt = Math.max(1, Math.round(h / pxPerFtBase))
-  // 中心 = AB 中点 + 向 C 侧偏移 h/2（使 AB 成为矩形底边）
-  const wx = A.x + vx / 2 + (-vy / L) * (h / 2) * s
-  const wy = A.y + vy / 2 + (vx / L) * (h / 2) * s
+  const sgn = cross >= 0 ? 1 : -1
+  const lengthFt = Math.max(1, Math.round(L / PX_PER_FT))
+  const heightFt = Math.max(1, Math.round(h / PX_PER_FT))
+  // 中心 = AB 中点 + 向 C 侧偏移 h/2（AB 为矩形底边，稳定不随 C 抖动）
+  const wx = a.x + vx / 2 + (-vy / L) * (h / 2) * sgn
+  const wy = a.y + vy / 2 + (vx / L) * (h / 2) * sgn
   const center = worldToHexPx(wx, wy)
   return { q: center.q, r: center.r, angle, widthFt: lengthFt, heightFt }
 }
-function commitRect(a: Hex, b: Hex, c: Hex) {
-  const r3 = rectFrom3(a, b, c)
+function commitRect(a: WPoint, b: WPoint, c: WPoint) {
+  const r3 = rectFromWorld(a, b, c)
   if (!r3) return
   session.addSpellArea({
     type: 'rect',
@@ -544,6 +581,7 @@ function clearRect() {
   rectB.value = null
   drawMap()
 }
+
 function drawRectShape(origin: Hex, wFt: number, hFt: number, angleRad: number, isPreview = false) {
   if (!ctx) return
   const sz = size()
@@ -661,6 +699,7 @@ function onMouseDown(e: MouseEvent) {
 function onMouseMove(e: MouseEvent) {
   const { x, y } = eventPos(e)
   hoverPos.value = screenToHex(x, y)
+  hoverW.value = screenToWorld(x, y)
   if (panDrag) {
     pan.value.x += x - downPos.x
     pan.value.y += y - downPos.y
@@ -707,13 +746,13 @@ function onMouseUp(e: MouseEvent) {
   } else if (tool.value === 'circle') {
     if (hex) commitCircle(hex)
   } else if (tool.value === 'rect') {
-    if (!hex) return
+    const w = screenToWorld(eventPos(e).x, eventPos(e).y)
     if (!rectA.value) {
-      rectA.value = hex
+      rectA.value = w
     } else if (!rectB.value) {
-      rectB.value = hex
+      rectB.value = w
     } else {
-      commitRect(rectA.value, rectB.value, hex)
+      commitRect(rectA.value, rectB.value, w)
       rectA.value = null
       rectB.value = null
     }
@@ -724,6 +763,7 @@ function onMouseUp(e: MouseEvent) {
 }
 function onMouseLeave() {
   hoverPos.value = null
+  hoverW.value = null
   dragCmbId = null
   panDrag = false
   drawMap()
