@@ -1227,13 +1227,30 @@ const TAB_TO_BLOCK: Record<string, CardBlock> = {
 function lightToCard(l: any): CharacterCard {
   const base = createEmptyCard(l.name || '角色')
   const card = normalizeCharacterCard({ ...base, ...l })!
+  return sanitizeCardNulls(card)
+}
+
+function sanitizeCardNulls(card: CharacterCard): CharacterCard {
+  // 防御：历史/后端曾把对象/数组字段写成 null -> 归回默认，避免模板 null.pp 等渲染崩溃
+  try {
+    const def = createEmptyCard(card.name || '')
+    ;(Object.keys(def) as (keyof CharacterCard)[]).forEach((k) => {
+      if ((card as any)[k] === null || (card as any)[k] === undefined) {
+        ;(card as any)[k] = def[k]
+      }
+    })
+  } catch (e) {
+    /* 忽略 */
+  }
   return card
 }
 
 function mergeBlockIntoCard(card: CharacterCard, block: CardBlock, data: any) {
   ;(CARD_BLOCKS[block] || []).forEach((k) => {
-    if (k in data) (card as any)[k] = data[k]
+    const v = (data as any)?.[k]
+    if (v !== undefined && v !== null) (card as any)[k] = v // null 视为“未提供”，不覆盖默认
   })
+  sanitizeCardNulls(card)
 }
 
 function markCardFull(id: string) {
@@ -1546,7 +1563,9 @@ function loadLocalCards(): CharacterCard[] {
     const saved = localStorage.getItem(STORAGE_KEY)
     if (saved) {
       const parsed = JSON.parse(saved)
-      return Array.isArray(parsed) ? parsed.map(normalizeCharacterCard).filter((c): c is NormalizedCard => c !== null) : []
+      return Array.isArray(parsed)
+        ? parsed.map((c: any) => sanitizeCardNulls(normalizeCharacterCard(c)!)).filter((c): c is NormalizedCard => c !== null)
+        : []
     }
   } catch (e) {
     console.error('读取角色卡失败', e)
@@ -1560,7 +1579,7 @@ function loadLocal() {
     try {
       const parsed = JSON.parse(saved)
       cards.value = Array.isArray(parsed)
-        ? parsed.map(normalizeCharacterCard).filter((c): c is NormalizedCard => c !== null)
+        ? parsed.map((c: any) => sanitizeCardNulls(normalizeCharacterCard(c)!)).filter((c): c is NormalizedCard => c !== null)
         : []
     } catch (err) {
       console.error('读取角色卡失败', err)
