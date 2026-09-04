@@ -172,7 +172,7 @@
 - **并发去重建议**：`combatants(session_id, ref_id)` 唯一索引 + sync/store 事务行锁（当前未加索引，极端并发下可能重复，可加）。
 
 **SpellArea**：`{"id":"...","type":"cone|circle|rect","q":3,"r":-1,"angle":0.6,"ft":30,"width_ft":null,"height_ft":null,"bound_to":"c1"}`（bound_to 跟随移动）。
-`rect` 由用户点选两个对角顶点生成：服务端存为中心格(q,r) + width_ft×height_ft(尺) + angle(0=轴对齐)，前端两角的世界跨距换算为宽高，方向随两点确定。
+`rect` 由用户三点生成（角、方向/长度、宽度）：服务端存 **wx/wy(世界坐标中心, 浮点)** + width_ft×height_ft(尺) + angle，矩形一条边严格落在前两点上；q/r 仅作兼容展示。
 
 ---
 

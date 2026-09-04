@@ -256,8 +256,10 @@ function drawMap() {
       if (c) origin = { q: c.q, r: c.r }
     }
     if (area.type === 'circle') drawCircleShape(origin, area.ft)
-    else if (area.type === 'rect') drawRectShape(origin, area.widthFt || 10, area.heightFt || 10, area.angle || 0)
-    else drawConeShape(origin, area.angle, area.ft)
+    else if (area.type === 'rect') {
+      if (area.wx != null && area.wy != null) drawRectWorld(area.wx, area.wy, area.widthFt || 10, area.heightFt || 10, area.angle || 0)
+      else drawRectShape(origin, area.widthFt || 10, area.heightFt || 10, area.angle || 0) // 旧数据回退
+    } else drawConeShape(origin, area.angle, area.ft)
   })
 
   if (measureStart.value) {
@@ -286,7 +288,7 @@ function drawMap() {
       if (rectB.value) {
         const r3 = rectFromWorld(rectA.value, rectB.value, pc)
         if (r3) {
-          drawRectShape({ q: r3.q, r: r3.r }, r3.widthFt, r3.heightFt, r3.angle, true)
+          drawRectWorld(r3.wx, r3.wy, r3.widthFt, r3.heightFt, r3.angle, true)
           drawAnchor(screenOfWorld(rectB.value), '2')
         }
       } else {
@@ -316,8 +318,10 @@ function drawMap() {
       if (c) origin = { q: c.q, r: c.r }
     }
     if (area.type === 'circle') drawCircleShape(origin, area.ft)
-    else if (area.type === 'rect') drawRectShape(origin, area.widthFt || 10, area.heightFt || 10, area.angle || 0)
-    else drawConeShape(origin, area.angle, area.ft)
+    else if (area.type === 'rect') {
+      if (area.wx != null && area.wy != null) drawRectWorld(area.wx, area.wy, area.widthFt || 10, area.heightFt || 10, area.angle || 0)
+      else drawRectShape(origin, area.widthFt || 10, area.heightFt || 10, area.angle || 0) // 旧数据回退
+    } else drawConeShape(origin, area.angle, area.ft)
   })
 
   if (measureStart.value) {
@@ -545,7 +549,7 @@ function worldToHexPx(wx: number, wy: number): Hex {
 const PX_PER_FT = (Math.sqrt(3) * HEX_SIZE) / HEX_FT
 
 // 三点（世界像素，A 固定角、B 定方向与长度、C 定宽度）-> 旋转矩形
-function rectFromWorld(a: WPoint, b: WPoint, c: WPoint): { q: number; r: number; angle: number; widthFt: number; heightFt: number } | null {
+function rectFromWorld(a: WPoint, b: WPoint, c: WPoint): { wx: number; wy: number; angle: number; widthFt: number; heightFt: number } | null {
   const vx = b.x - a.x
   const vy = b.y - a.y
   const L = Math.hypot(vx, vy)
@@ -556,23 +560,25 @@ function rectFromWorld(a: WPoint, b: WPoint, c: WPoint): { q: number; r: number;
   const sgn = cross >= 0 ? 1 : -1
   const lengthFt = Math.max(1, Math.round(L / PX_PER_FT))
   const heightFt = Math.max(1, Math.round(h / PX_PER_FT))
-  // 中心 = AB 中点 + 向 C 侧偏移 h/2（AB 为矩形底边，稳定不随 C 抖动）
+  // 中心 = AB 中点 + 向 C 侧偏移 h/2：AB 始终为矩形底边（世界浮点，不取整、不漂移）
   const wx = a.x + vx / 2 + (-vy / L) * (h / 2) * sgn
   const wy = a.y + vy / 2 + (vx / L) * (h / 2) * sgn
-  const center = worldToHexPx(wx, wy)
-  return { q: center.q, r: center.r, angle, widthFt: lengthFt, heightFt }
+  return { wx, wy, angle, widthFt: lengthFt, heightFt }
 }
 function commitRect(a: WPoint, b: WPoint, c: WPoint) {
   const r3 = rectFromWorld(a, b, c)
   if (!r3) return
+  const center = worldToHexPx(r3.wx, r3.wy) // q/r 兼容旧端显示；精确位置用 wx/wy
   session.addSpellArea({
     type: 'rect',
-    q: r3.q,
-    r: r3.r,
+    q: center.q,
+    r: center.r,
     angle: r3.angle,
     ft: 0,
     widthFt: r3.widthFt,
     heightFt: r3.heightFt,
+    wx: r3.wx,
+    wy: r3.wy,
     boundTo: spellBind.value || null,
   })
 }
@@ -583,14 +589,22 @@ function clearRect() {
 }
 
 function drawRectShape(origin: Hex, wFt: number, hFt: number, angleRad: number, isPreview = false) {
+  const c = hexToScreen(origin.q, origin.r)
+  drawRectAt(c.x, c.y, wFt, hFt, angleRad, isPreview)
+}
+// 以世界坐标（基础尺）中心精确绘制（不经过 hex 取整）
+function drawRectWorld(wx: number, wy: number, wFt: number, hFt: number, angleRad: number, isPreview = false) {
+  const c = screenOfWorld({ x: wx, y: wy })
+  drawRectAt(c.x, c.y, wFt, hFt, angleRad, isPreview)
+}
+function drawRectAt(cx: number, cy: number, wFt: number, hFt: number, angleRad: number, isPreview = false) {
   if (!ctx) return
   const sz = size()
-  const c = hexToScreen(origin.q, origin.r)
-  const pxPerFt = (Math.sqrt(3) * sz) / HEX_FT // 与圆形一致的每尺像素比例
+  const pxPerFt = (Math.sqrt(3) * sz) / HEX_FT
   const halfW = (wFt * pxPerFt) / 2
   const halfH = (hFt * pxPerFt) / 2
   ctx.save()
-  ctx.translate(c.x, c.y)
+  ctx.translate(cx, cy)
   ctx.rotate(angleRad)
   ctx.fillStyle = isPreview ? 'rgba(168,85,247,0.15)' : 'rgba(168,85,247,0.22)'
   ctx.fillRect(-halfW, -halfH, halfW * 2, halfH * 2)
@@ -601,8 +615,9 @@ function drawRectShape(origin: Hex, wFt: number, hFt: number, angleRad: number, 
   ctx.font = '12px sans-serif'
   ctx.fillStyle = '#6d28d9'
   ctx.textAlign = 'center'
-  ctx.fillText(`${wFt}×${hFt} 尺`, c.x, c.y)
+  ctx.fillText(`${wFt}×${hFt} 尺`, cx, cy)
 }
+
 function drawAnchor(p: { x: number; y: number }, label: string) {
   if (!ctx) return
   ctx.beginPath()

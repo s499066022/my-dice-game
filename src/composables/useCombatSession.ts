@@ -59,6 +59,8 @@ export interface SpellArea {
   ft: number
   widthFt?: number // rect：宽（尺）
   heightFt?: number // rect：长（尺）
+  wx?: number // rect：世界坐标中心 X（基础尺，浮点，保证边精确落在所点两点）
+  wy?: number
   boundTo: string | null
 }
 
@@ -196,6 +198,8 @@ function areaToApi(a: SpellArea): any {
     ft: a.ft,
     width_ft: a.widthFt ?? null,
     height_ft: a.heightFt ?? null,
+    wx: a.wx ?? null,
+    wy: a.wy ?? null,
     bound_to: a.boundTo || null,
   }
 }
@@ -210,6 +214,8 @@ function apiToArea(a: any): SpellArea {
     ft: a.ft == null ? 30 : Number(a.ft),
     widthFt: a.width_ft == null ? undefined : Number(a.width_ft),
     heightFt: a.height_ft == null ? undefined : Number(a.height_ft),
+    wx: a.wx == null ? undefined : Number(a.wx),
+    wy: a.wy == null ? undefined : Number(a.wy),
     boundTo: a.bound_to || null,
   }
 }
@@ -685,6 +691,8 @@ export function addSpellArea(area: Partial<SpellArea>): SpellArea {
     ft: area.ft ?? (area.type === 'rect' ? 0 : 30),
     widthFt: area.widthFt,
     heightFt: area.heightFt,
+    wx: area.wx,
+    wy: area.wy,
     boundTo: area.boundTo ?? null,
   }
   spellAreas.push(a)
