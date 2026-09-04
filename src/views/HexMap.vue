@@ -76,7 +76,7 @@
             <button class="tp-btn" @click="clearCircle">清除</button>
           </div>
           <div v-else-if="tool === 'rect'" class="tp-fields">
-            <span class="tp-tip">{{ rectStart ? '再点对角顶点完成' : '先点第一个角' }}</span>
+            <span class="tp-tip">{{ rectA && !rectB ? '点第 2 点：方向与长度' : rectA && rectB ? '点第 3 点：宽度' : '点第 1 个角（固定）' }}</span>
             <el-select v-model="spellBind" size="small" style="width: 104px" placeholder="绑定参战者">
               <el-option value="" label="不绑定" />
               <el-option v-for="t in session.combatants" :key="t.id" :value="t.id" :label="t.name || '角色'" />
@@ -165,7 +165,9 @@ const measureData = ref('')
 const coneStart = ref<Hex | null>(null)
 const coneFt = ref(30)
 const circleFt = ref(20)
-const rectStart = ref<Hex | null>(null) // 矩形第一角（对角顶点 1）
+const rectA = ref<Hex | null>(null) // 第 1 点：矩形角（固定锚点）
+const rectB = ref<Hex | null>(null) // 第 2 点：定方向与长度
+// 第 3 点（hover 实时）决定宽度；完成时以第三点击为准
 const spellBind = ref('') // 绑定到某个参战者
 
 let dragCmbId: string | null = null
@@ -256,18 +258,6 @@ function drawMap() {
     else drawConeShape(origin, area.angle, area.ft)
   })
 
-  // 矩形预览：第一角 -> 鼠标位置（对角预览）
-  if (tool.value === 'rect' && rectStart.value && hoverPos.value) {
-    const A = worldPos(rectStart.value)
-    const B = worldPos(hoverPos.value)
-    const cx = (A.x + B.x) / 2
-    const cy = (A.y + B.y) / 2
-    const pc = worldToHexPx(cx, cy)
-    const wFt = Math.max(5, Math.round((Math.abs(B.x - A.x) / HEX_SIZE) * HEX_FT))
-    const hFt = Math.max(5, Math.round((Math.abs(B.y - A.y) / HEX_SIZE) * HEX_FT))
-    drawRectShape(pc, wFt, hFt, 0, true)
-  }
-
   if (measureStart.value) {
     const a = hexToScreen(measureStart.value.q, measureStart.value.r)
     const t = measureEnd.value || (tool.value === 'measure' ? hoverPos.value : null)
@@ -283,6 +273,33 @@ function drawMap() {
     const a = hexToScreen(coneStart.value.q, coneStart.value.r)
     const b = hexToScreen(hoverPos.value.q, hoverPos.value.r)
     drawConeShape(coneStart.value, Math.atan2(b.y - a.y, b.x - a.x), coneFt.value, true)
+  }
+
+  // 矩形三点预览：第 1 点固定显示；第 2 点后实时预览（C=鼠标）
+  if (tool.value === 'rect' && rectA.value) {
+    const pa = hexToScreen(rectA.value.q, rectA.value.r)
+    drawAnchor(pa, '1')
+    if (hoverPos.value) {
+      if (rectB.value) {
+        const r3 = rectFrom3(rectA.value, rectB.value, hoverPos.value)
+        if (r3) {
+          drawRectShape({ q: r3.q, r: r3.r }, r3.widthFt, r3.heightFt, r3.angle, true)
+          const pb = hexToScreen(rectB.value.q, rectB.value.r)
+          drawAnchor(pb, '2')
+        }
+      } else {
+        // 只定了第 1 点：画边线到鼠标
+        const pb = hexToScreen(hoverPos.value.q, hoverPos.value.r)
+        ctx.beginPath()
+        ctx.moveTo(pa.x, pa.y)
+        ctx.lineTo(pb.x, pb.y)
+        ctx.strokeStyle = 'rgba(168,85,247,0.6)'
+        ctx.lineWidth = 1.5
+        ctx.setLineDash([5, 4])
+        ctx.stroke()
+        ctx.setLineDash([])
+      }
+    }
   }
 
   // 会话法术区域已在上面渲染（本地 indicators 不再使用，避免残留无法删除）
@@ -485,27 +502,46 @@ function worldToHexPx(wx: number, wy: number): Hex {
   const rr = ((-1 / 3) * wx + (Math.sqrt(3) / 3) * wy) / sz
   return hexRound(q, rr)
 }
-function commitRect(a: Hex, b: Hex) {
+// 三点构造旋转矩形：A=角点(固定) B=方向与长度 C=宽度
+// 几何：AB 为矩形底边（长=lengthFt、方向 angle），宽= C 到直线 AB 的距离，向 C 侧展开
+function rectFrom3(a: Hex, b: Hex, c: Hex): { q: number; r: number; angle: number; widthFt: number; heightFt: number } | null {
   const A = worldPos(a)
   const B = worldPos(b)
-  const cx = (A.x + B.x) / 2
-  const cy = (A.y + B.y) / 2
-  const center = worldToHexPx(cx, cy)
-  const cellW = Math.abs(B.x - A.x) / HEX_SIZE
-  const cellH = Math.abs(B.y - A.y) / HEX_SIZE
+  const C = worldPos(c)
+  const vx = B.x - A.x
+  const vy = B.y - A.y
+  const L = Math.hypot(vx, vy)
+  if (L < 1e-6) return null
+  const angle = Math.atan2(vy, vx)
+  const cross = vx * (C.y - A.y) - vy * (C.x - A.x)
+  const h = Math.abs(cross) / L // 垂直距离（世界像素）
+  const s = cross >= 0 ? 1 : -1 // 向 C 侧
+  const pxPerFtBase = HEX_SIZE / HEX_FT
+  const lengthFt = Math.max(1, Math.round(L / pxPerFtBase))
+  const heightFt = Math.max(1, Math.round(h / pxPerFtBase))
+  // 中心 = AB 中点 + 向 C 侧偏移 h/2（使 AB 成为矩形底边）
+  const wx = A.x + vx / 2 + (-vy / L) * (h / 2) * s
+  const wy = A.y + vy / 2 + (vx / L) * (h / 2) * s
+  const center = worldToHexPx(wx, wy)
+  return { q: center.q, r: center.r, angle, widthFt: lengthFt, heightFt }
+}
+function commitRect(a: Hex, b: Hex, c: Hex) {
+  const r3 = rectFrom3(a, b, c)
+  if (!r3) return
   session.addSpellArea({
     type: 'rect',
-    q: center.q,
-    r: center.r,
-    angle: 0,
+    q: r3.q,
+    r: r3.r,
+    angle: r3.angle,
     ft: 0,
-    widthFt: Math.max(5, Math.round(cellW * HEX_FT)),
-    heightFt: Math.max(5, Math.round(cellH * HEX_FT)),
+    widthFt: r3.widthFt,
+    heightFt: r3.heightFt,
     boundTo: spellBind.value || null,
   })
 }
 function clearRect() {
-  rectStart.value = null
+  rectA.value = null
+  rectB.value = null
   drawMap()
 }
 function drawRectShape(origin: Hex, wFt: number, hFt: number, angleRad: number, isPreview = false) {
@@ -528,6 +564,22 @@ function drawRectShape(origin: Hex, wFt: number, hFt: number, angleRad: number, 
   ctx.fillStyle = '#6d28d9'
   ctx.textAlign = 'center'
   ctx.fillText(`${wFt}×${hFt} 尺`, c.x, c.y)
+}
+function drawAnchor(p: { x: number; y: number }, label: string) {
+  if (!ctx) return
+  ctx.beginPath()
+  ctx.arc(p.x, p.y, 7, 0, Math.PI * 2)
+  ctx.fillStyle = 'rgba(168,85,247,0.9)'
+  ctx.fill()
+  ctx.strokeStyle = '#fff'
+  ctx.lineWidth = 2
+  ctx.stroke()
+  ctx.fillStyle = '#fff'
+  ctx.font = 'bold 10px sans-serif'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText(label, p.x, p.y)
+  ctx.textBaseline = 'alphabetic'
 }
 function removeIndicator(id: string) {
   session.removeSpellArea(id)
@@ -656,12 +708,16 @@ function onMouseUp(e: MouseEvent) {
     if (hex) commitCircle(hex)
   } else if (tool.value === 'rect') {
     if (!hex) return
-    if (!rectStart.value) {
-      rectStart.value = hex
+    if (!rectA.value) {
+      rectA.value = hex
+    } else if (!rectB.value) {
+      rectB.value = hex
     } else {
-      commitRect(rectStart.value, hex)
-      rectStart.value = null
+      commitRect(rectA.value, rectB.value, hex)
+      rectA.value = null
+      rectB.value = null
     }
+    drawMap()
   }
   dragCmbId = null
   drawMap()
