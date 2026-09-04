@@ -96,7 +96,7 @@ import {
   deleteParty,
   findPartyByMember,
 } from '../data/partyModel'
-import { backendPing, backendFetchParties, backendPublishParties } from '../api/characterBackend'
+import { backendPing, backendFetchParties, backendPublishParties, backendFetchLightCharacters } from '../api/characterBackend'
 import { onPartiesLive } from '../api/reverb'
 
 const CARDS_KEY = 'dnd-character-cards'
@@ -121,19 +121,47 @@ const availableCards = computed(() => {
   return cards.value.filter((c) => !taken.has(c.id))
 })
 
-function loadCards() {
+// 读取角色卡：本地缓存为底；在线时用后端 light 补齐“本地没有”的角色，
+// 以便“被删除的角色”能及时从团的成员统计中消失。
+async function loadCards() {
   try {
     const saved = localStorage.getItem(CARDS_KEY)
+    let local: CharacterCard[] = []
     if (saved) {
       const parsed = JSON.parse(saved)
-      cards.value = Array.isArray(parsed)
-        ? parsed.map(normalizeCharacterCard).filter((c): c is CharacterCard => c !== null)
-        : []
+      local = Array.isArray(parsed) ? parsed.map(normalizeCharacterCard).filter((c): c is CharacterCard => c !== null) : []
+    }
+    cards.value = local
+    try {
+      const light = await backendFetchLightCharacters() // 在线成功返回 light；离线/失败为 null
+      if (Array.isArray(light) && light.length) {
+        const localIds = new Set(local.map((c) => c.id))
+        const extras: any[] = light.filter((l: any) => l && l.id && !localIds.has(String(l.id)))
+        if (extras.length) cards.value = [...local, ...extras.map((l) => ({ ...l }) as CharacterCard)]
+      }
+    } catch (e) {
+      /* 离线：仅本地 */
     }
   } catch (e) {
     console.error('读取角色卡失败', e)
     cards.value = []
   }
+  pruneDeletedMembers()
+}
+
+// 成员校正：团 memberIds 中不在“当前角色卡集合”的成员会被移除（人数随之修正），并触发自动发布
+function pruneDeletedMembers() {
+  const valid = new Set(cards.value.map((c) => c.id))
+  let changed = false
+  parties.value.forEach((p) => {
+    const kept = p.memberIds.filter((id) => valid.has(id))
+    if (kept.length !== p.memberIds.length) {
+      p.memberIds = kept
+      p.updatedAt = new Date().toISOString()
+      changed = true
+    }
+  })
+  if (changed) saveParties(parties.value)
 }
 
 let publishTimer: ReturnType<typeof setTimeout> | null = null
@@ -181,10 +209,13 @@ async function pullFromBackend() {
     const online = await backendPing()
     if (!online) return
     const remote = await backendFetchParties()
-    if (remote && Array.isArray(remote) && remote.length) applyRemote(remote)
-    else if (parties.value.length) {
+    if (remote && Array.isArray(remote) && remote.length) {
+      applyRemote(remote)
+      pruneDeletedMembers()
+    } else if (parties.value.length) {
       await backendPublishParties(JSON.parse(JSON.stringify(parties.value)))
     }
+    await loadCards() // 顺带刷新有效角色集合并再次校正
   } finally {
     pulling = false
   }
@@ -234,17 +265,21 @@ function removeMember(cardId: string) {
 }
 
 watch(parties, persist, { deep: true })
+watch(currentPartyId, () => pruneDeletedMembers()) // 进入/切换某团信息时校正成员
 
-function onMountedInit() {
-  loadCards()
+async function onMountedInit() {
   suppressPublish = true
   parties.value = loadParties()
   currentPartyId.value = parties.value[0]?.id ?? ''
   suppressPublish = false
-  syncFromBackend()
+  await loadCards() // 本地 + 后端 light 补齐，并校正各团失效成员（人数随之修正）
+  await syncFromBackend()
   // 实时频道（团页单独会话 presence-parties）
   onPartiesLive((list) => {
-    if (Array.isArray(list)) applyRemote(list)
+    if (Array.isArray(list)) {
+      applyRemote(list)
+      pruneDeletedMembers()
+    }
   })
   // 每 30s 兜底拉一次（离线/未连 WS 时仍能同步）
   setInterval(() => pullFromBackend(), 30000)
@@ -255,8 +290,10 @@ async function syncFromBackend() {
   const online = await backendPing()
   if (!online) return
   const remote = await backendFetchParties()
-  if (remote && remote.length) applyRemote(remote)
-  else if (parties.value.length) {
+  if (remote && remote.length) {
+    applyRemote(remote)
+    pruneDeletedMembers()
+  } else if (parties.value.length) {
     backendPublishParties(JSON.parse(JSON.stringify(parties.value)))
   }
 }

@@ -1220,7 +1220,12 @@ async function maybeLoadTab() {
   const block = TAB_TO_BLOCK[activeTab.value]
   if (!block || block === 'combat') return
   if (blockLoaded.get(card.id)?.has(block)) return
-  const data = await backendFetchCardBlock(card.id, block)
+  let data: any = null
+  try {
+    data = await backendFetchCardBlock(card.id, block)
+  } catch (e) {
+    /* 忽略：懒加载失败不阻塞切换 */
+  }
   if (!data) return
   mergeBlockIntoCard(card, block, data)
   const set = blockLoaded.get(card.id) || new Set<CardBlock>()
@@ -1566,7 +1571,15 @@ function addSampleCharacters() {
 }
 
 watch(cards, (nv) => scheduleSync(nv), { deep: true })
-watch(currentId, localSave)
+function onCurrentIdChange() {
+  localSave()
+  // 停在“法术”页切卡：立即清空并加载新卡的法术列表，避免显示上一张卡的数据（感觉“没切换/点击无效”）
+  if (mode.value === 'v2' && activeTab.value === 'spells' && currentId.value) {
+    resetSpells()
+    loadSpells(1)
+  }
+}
+watch(currentId, onCurrentIdChange)
 watch([activeTab, currentId], () => maybeLoadTab())
 
 onMounted(() => {
