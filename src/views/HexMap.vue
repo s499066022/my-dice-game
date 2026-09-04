@@ -40,6 +40,7 @@
             <button :class="{ on: tool === 'measure' }" title="测量距离" @click="tool = 'measure'">📏 测量</button>
             <button :class="{ on: tool === 'cone' }" title="法术锥形" @click="tool = 'cone'">🔺 锥形</button>
             <button :class="{ on: tool === 'circle' }" title="圆形施法（范围）" @click="tool = 'circle'">🔵 圆形</button>
+            <button :class="{ on: tool === 'rect' }" title="矩形法术区域" @click="tool = 'rect'">▭ 矩形</button>
           </div>
 
           <div class="tp-zoom">
@@ -74,6 +75,19 @@
             <span class="tp-tip">点中心放置</span>
             <button class="tp-btn" @click="clearCircle">清除</button>
           </div>
+          <div v-else-if="tool === 'rect'" class="tp-fields">
+            <span class="tp-tip">宽</span>
+            <el-input-number v-model="rectW" :min="5" :max="200" :step="5" size="small" style="width: 84px" />
+            <span class="tp-tip">长</span>
+            <el-input-number v-model="rectH" :min="5" :max="300" :step="5" size="small" style="width: 84px" />
+            <span class="tp-tip">角°</span>
+            <el-input-number v-model="rectAngle" :min="0" :max="360" size="small" style="width: 76px" />
+            <el-select v-model="spellBind" size="small" style="width: 104px" placeholder="绑定参战者">
+              <el-option value="" label="不绑定" />
+              <el-option v-for="t in session.combatants" :key="t.id" :value="t.id" :label="t.name || '角色'" />
+            </el-select>
+            <span class="tp-tip">点中心放置（长沿角度方向）</span>
+          </div>
 
           <!-- 会话参战者（可拖拽） -->
           <div v-if="session.combatants.length" class="tp-list">
@@ -99,7 +113,7 @@
             <div class="tp-list-title">法术区域（锥形/圆形）{{ session.spellAreas.length }}</div>
             <div v-for="ind in session.spellAreas" :key="ind.id" class="tp-row">
               <span class="tp-dot" :style="{ background: ind.type === 'circle' ? '#3b82f6' : '#ef4444' }"></span>
-              <span class="tp-kind">{{ ind.type === 'circle' ? '🔵' : '🔺' }}{{ ind.ft }}尺</span>
+              <span class="tp-kind">{{ ind.type === 'circle' ? '🔵' : ind.type === 'rect' ? '▭' : '🔺' }}{{ ind.type === 'rect' ? (ind.widthFt || 0) + '×' + (ind.heightFt || 0) + '尺' : ind.ft + '尺' }}</span>
               <el-select v-model="ind.boundTo" size="small" style="width: 112px" placeholder="绑定参战者" @change="session.updateSpellArea(ind.id, { boundTo: ind.boundTo })">
                 <el-option :value="null" label="不绑定" />
                 <el-option v-for="t in session.combatants" :key="t.id" :value="t.id" :label="t.name || '角色'" />
@@ -142,7 +156,7 @@ let gridCacheKey = ''
 
 const zoom = ref(1)
 const pan = ref({ x: 0, y: 0 })
-const tool = ref<'pan' | 'char' | 'measure' | 'cone' | 'circle'>('char')
+const tool = ref<'pan' | 'char' | 'measure' | 'cone' | 'circle' | 'rect'>('char')
 const toolsOpen = ref(true)
 const showLibrary = false // 暂屏蔽左上角色来源面板
 const session = useCombatSession()
@@ -156,6 +170,9 @@ const measureData = ref('')
 const coneStart = ref<Hex | null>(null)
 const coneFt = ref(30)
 const circleFt = ref(20)
+const rectW = ref(20) // 矩形宽（尺）
+const rectH = ref(30) // 矩形长（尺）
+const rectAngle = ref(0) // 矩形角度（度）
 const spellBind = ref('') // 绑定到某个参战者
 
 let dragCmbId: string | null = null
@@ -242,6 +259,7 @@ function drawMap() {
       if (c) origin = { q: c.q, r: c.r }
     }
     if (area.type === 'circle') drawCircleShape(origin, area.ft)
+    else if (area.type === 'rect') drawRectShape(origin, area.widthFt || 10, area.heightFt || 10, area.angle || 0)
     else drawConeShape(origin, area.angle, area.ft)
   })
 
@@ -452,6 +470,39 @@ function commitCone(start: Hex, dir: Hex) {
 function commitCircle(center: Hex) {
   session.addSpellArea({ type: 'circle', q: center.q, r: center.r, angle: 0, ft: circleFt.value, boundTo: spellBind.value || null })
 }
+function commitRect(center: Hex) {
+  session.addSpellArea({
+    type: 'rect',
+    q: center.q,
+    r: center.r,
+    angle: (rectAngle.value * Math.PI) / 180,
+    ft: 0,
+    widthFt: rectW.value,
+    heightFt: rectH.value,
+    boundTo: spellBind.value || null,
+  })
+}
+function drawRectShape(origin: Hex, wFt: number, hFt: number, angleRad: number, isPreview = false) {
+  if (!ctx) return
+  const sz = size()
+  const c = hexToScreen(origin.q, origin.r)
+  const pxPerFt = (Math.sqrt(3) * sz) / HEX_FT // 与圆形一致的每尺像素比例
+  const halfW = (wFt * pxPerFt) / 2
+  const halfH = (hFt * pxPerFt) / 2
+  ctx.save()
+  ctx.translate(c.x, c.y)
+  ctx.rotate(angleRad)
+  ctx.fillStyle = isPreview ? 'rgba(168,85,247,0.15)' : 'rgba(168,85,247,0.22)'
+  ctx.fillRect(-halfW, -halfH, halfW * 2, halfH * 2)
+  ctx.strokeStyle = 'rgba(168,85,247,0.85)'
+  ctx.lineWidth = 1.5
+  ctx.strokeRect(-halfW, -halfH, halfW * 2, halfH * 2)
+  ctx.restore()
+  ctx.font = '12px sans-serif'
+  ctx.fillStyle = '#6d28d9'
+  ctx.textAlign = 'center'
+  ctx.fillText(`${wFt}×${hFt} 尺`, c.x, c.y)
+}
 function removeIndicator(id: string) {
   session.removeSpellArea(id)
 }
@@ -577,6 +628,8 @@ function onMouseUp(e: MouseEvent) {
     }
   } else if (tool.value === 'circle') {
     if (hex) commitCircle(hex)
+  } else if (tool.value === 'rect') {
+    if (hex) commitRect(hex)
   }
   dragCmbId = null
   drawMap()

@@ -52,11 +52,13 @@ export interface Combatant {
 
 export interface SpellArea {
   id: string
-  type: 'cone' | 'circle'
+  type: 'cone' | 'circle' | 'rect'
   q: number
   r: number
   angle: number
   ft: number
+  widthFt?: number // rect：宽（尺）
+  heightFt?: number // rect：长（尺）
   boundTo: string | null
 }
 
@@ -185,17 +187,29 @@ function apiToLocal(a: any): Combatant {
 }
 
 function areaToApi(a: SpellArea): any {
-  return { id: a.id, type: a.type, q: a.q, r: a.r, angle: a.angle, ft: a.ft, bound_to: a.boundTo || null }
+  return {
+    id: a.id,
+    type: a.type,
+    q: a.q,
+    r: a.r,
+    angle: a.angle,
+    ft: a.ft,
+    width_ft: a.widthFt ?? null,
+    height_ft: a.heightFt ?? null,
+    bound_to: a.boundTo || null,
+  }
 }
 
 function apiToArea(a: any): SpellArea {
   return {
     id: a.id,
-    type: a.type === 'cone' ? 'cone' : 'circle',
+    type: a.type === 'rect' ? 'rect' : a.type === 'cone' ? 'cone' : 'circle',
     q: a.q == null ? 0 : Number(a.q),
     r: a.r == null ? 0 : Number(a.r),
     angle: a.angle == null ? 0 : Number(a.angle),
     ft: a.ft == null ? 30 : Number(a.ft),
+    widthFt: a.width_ft == null ? undefined : Number(a.width_ft),
+    heightFt: a.height_ft == null ? undefined : Number(a.height_ft),
     boundTo: a.bound_to || null,
   }
 }
@@ -668,7 +682,9 @@ export function addSpellArea(area: Partial<SpellArea>): SpellArea {
     q: area.q || 0,
     r: area.r || 0,
     angle: area.angle || 0,
-    ft: area.ft || 30,
+    ft: area.ft ?? (area.type === 'rect' ? 0 : 30),
+    widthFt: area.widthFt,
+    heightFt: area.heightFt,
     boundTo: area.boundTo ?? null,
   }
   spellAreas.push(a)
@@ -694,11 +710,13 @@ export function removeSpellArea(id: string) {
 export function updateSpellArea(id: string, fields: Partial<SpellArea>) {
   const a = spellAreas.find((x) => x.id === id)
   if (!a) return
-  if (fields.type === 'cone' || fields.type === 'circle') a.type = fields.type
+  if (fields.type === 'cone' || fields.type === 'circle' || fields.type === 'rect') a.type = fields.type
   if (fields.q !== undefined) a.q = fields.q
   if (fields.r !== undefined) a.r = fields.r
   if (fields.angle !== undefined) a.angle = fields.angle
   if (fields.ft !== undefined) a.ft = fields.ft
+  if (fields.widthFt !== undefined) a.widthFt = fields.widthFt
+  if (fields.heightFt !== undefined) a.heightFt = fields.heightFt
   if ('boundTo' in fields) a.boundTo = fields.boundTo ?? null
   saveLocal()
   drawNotifier.value++
