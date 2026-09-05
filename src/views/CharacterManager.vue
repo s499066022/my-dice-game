@@ -77,19 +77,6 @@
       </el-dialog>
     </div>
 
-    <!-- 后端连接状态条 -->
-    <div class="cm-backend">
-      <el-tag :type="statusTagType" size="small">
-        {{ statusLabel }}
-      </el-tag>
-      <el-input v-model="backendUrlInput" size="small" placeholder="后端地址，如 http://localhost:12226/api" class="cm-be-input" />
-      <el-button size="small" @click="testConnection">测试连接</el-button>
-      <el-button size="small" type="success" plain title="将整库角色卡全量覆盖到后端（新建/导入后建议点一次）" @click="pushToBackendWhole(true)">
-        整卡同步
-      </el-button>
-      <span v-if="backendStatus.lastSync" class="cm-sync-time">上次同步 {{ backendStatus.lastSync }}</span>
-    </div>
-
     <!-- 空状态 -->
     <div v-if="!cards.length" class="cm-empty">
       <p>还没有角色卡。</p>
@@ -610,8 +597,6 @@ import {
   backendPatchSpell,
   backendDeleteSpell,
   backendDeleteCard,
-  getBackendBase,
-  setBackendBase,
   useBackendStatus,
 } from '../api/characterBackend'
 import { connectCharacterCards } from '../api/reverb'
@@ -631,7 +616,6 @@ const currentId = ref('')
 const activeTab = ref('combat')
 const fileInput = ref<HTMLInputElement | null>(null)
 const backendStatus = useBackendStatus()
-const backendUrlInput = ref(getBackendBase())
 const weaponPresetSel = ref('')
 const weaponLibrary = ref<WeaponPreset[]>([])
 const manageDialog = ref(false)
@@ -724,15 +708,6 @@ const filteredLegacySpells = computed(() => {
 function fmtMod(n: number): string {
   return n >= 0 ? `+${n}` : `${n}`
 }
-
-const statusTagType = computed(() =>
-  backendStatus.value.status === 'online' ? 'success' : backendStatus.value.checking ? 'info' : 'warning'
-)
-const statusLabel = computed(() => {
-  if (backendStatus.value.checking) return '连接检查中…'
-  if (backendStatus.value.status === 'online') return '后端已连接'
-  return '后端离线（使用本地存储）'
-})
 
 // ========== 卡片增删改 ==========
 function addCard() {
@@ -1418,30 +1393,6 @@ function watchCardsRealtime() {
       if (mode.value === 'v2' && cardId === currentId.value) loadSpells(spellsPage.value)
     },
   })
-}
-
-async function testConnection() {
-  setBackendBase(backendUrlInput.value)
-  backendStatus.value.checking = true
-  backendStatus.value.error = null
-  const ok = await backendPing()
-  backendStatus.value.checking = false
-  backendStatus.value.status = ok ? 'online' : 'offline'
-  if (ok) {
-    const remote = await backendFetchAll()
-    if (remote) {
-      const norm = remote.map(normalizeCharacterCard).filter((c): c is NormalizedCard => c !== null)
-      if (norm.length || !cards.value.length) {
-        const ids = new Set(norm.map((c) => c.id))
-        // 合并：保留本地当前集合与远端并集，避免覆盖本地新增
-        const merged = [...cards.value.filter((c) => !ids.has(c.id)), ...norm]
-        cards.value = merged
-      }
-    }
-    ElMessage.success('后端连接成功，已拉取数据')
-  } else {
-    ElMessage.warning('无法连接后端，将使用本地存储')
-  }
 }
 
 function loadWeaponLibrary() {

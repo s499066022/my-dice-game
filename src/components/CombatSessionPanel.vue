@@ -12,6 +12,9 @@
         <el-option v-for="p in parties" :key="p.id" :value="p.id" :label="p.name || '团'" />
       </el-select>
       <el-button size="small" :type="locked ? 'warning' : 'success'" plain @click="onLock">🔒 锁定</el-button>
+      <el-button size="small" plain @click="hideDanger = !hideDanger" :title="hideDanger ? '显示删除/换位按钮' : '隐藏行动顺序表里的删除/换位，防误触'">
+        {{ hideDanger ? '👀 显示删换' : '🙈 隐藏删换' }}
+      </el-button>
       <el-button size="small" type="danger" plain @click="onReset">重置</el-button>
       <span v-if="sessionId" class="cs-session">会话(团ID): {{ sessionId }}</span>
     </div>
@@ -58,8 +61,11 @@
               <input type="number" v-model.number="c.hp.max" class="hp-in" min="1" @change="hpMax(c)" />
             </td>
             <td>
-              <button class="cs-mini" title="换位" :disabled="locked" @click="swapClick(c.id)">⇄</button>
-              <button class="cs-mini del" title="移除" :disabled="locked" @click="remove(c.id)">✕</button>
+              <template v-if="!hideDanger">
+                <button class="cs-mini" title="换位" :disabled="locked" @click="swapClick(c.id)">⇄</button>
+                <button class="cs-mini del" title="移除" :disabled="locked" @click="remove(c.id)">✕</button>
+              </template>
+              <span v-else class="cs-dim">—</span>
             </td>
           </tr>
         </tbody>
@@ -108,6 +114,7 @@ const session = useCombatSession()
 const selectedCard = ref('')
 const selectedParty = ref('')
 const mon = ref({ name: '', init: 0, ac: 10, hp: 20, size: 1 })
+const hideDanger = ref(false) // 隐藏行动顺序表里的 删除/换位（防误触）
 
 // 从 store 解构
 const sessionId = session.sessionId
@@ -467,6 +474,9 @@ onMounted(async () => {
   cursor: pointer;
   font-size: 12px;
   margin: 0 1px;
+}
+.cs-dim {
+  color: #d1d5db;
 }
 .cs-mini.del {
   color: #dc2626;
