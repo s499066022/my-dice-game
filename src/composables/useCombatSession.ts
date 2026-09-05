@@ -636,6 +636,9 @@ function equipmentInitBonus(c: Combatant): number {
 }
 
 // 换位
+// 注意：换位是“交换次序”这种非幂等操作，广播事件（CombatantSwapped）会回给操作方自己。
+// 已订阅长连接（online）时本地不重复换（等 Echo 事件应用一次），避免“双重换回原位”；
+// 仅 REST 模式（未订阅 Echo）才本地自应用，否则屏幕不动直到刷新。
 export async function swapCombatants(aId: string, bId: string): Promise<boolean> {
   if (locked.value) return false
   const a = combatants.find((c) => c.id === aId)
@@ -644,7 +647,7 @@ export async function swapCombatants(aId: string, bId: string): Promise<boolean>
   if (connected.value) {
     const r = await backendCombatantSwap(aId, bId)
     if (r && r.ok === true) {
-      swapOrdersLocal(aId, bId)
+      if (!online.value) swapOrdersLocal(aId, bId)
       return true
     }
     return false
