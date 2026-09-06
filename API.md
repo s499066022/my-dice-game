@@ -111,6 +111,18 @@
 
 ---
 
+## 3.5 临时怪物图鉴（名称 + OSS 图片，共享列表）
+
+| 方法 | 路径 | 请求体 | 返回/说明 |
+|---|---|---|---|
+| GET | `/api/bestiary` | — | `{"ok":true,"data":[<MonsterImage>...]}`（created_at 倒序） |
+| POST | `/api/bestiary` | `{"id":"可选","name":"...","image_path":"OSS path"}` | `{"ok":true,"data":{...}}` |
+| DELETE | `/api/bestiary/{id}` | — | `{"ok":true}` |
+
+**MonsterImage**：`{"id","name","image_path","created_at","updated_at"}`。
+- 图片本体上传走既有 `POST /api/common/ossupload`（form-data file → `{code:0,data:{path,...}}`），展示经 `GET /api/common/ossShowFile?path=...`。
+- 写后广播 `BestiaryChanged`（presence-bestiary，全量 `{items:[...]}`），各端整体刷新。
+
 ## 4. 先攻结果（全局共享一份，兼容保留）
 
 | 方法 | 路径 | 请求体 | 返回 |

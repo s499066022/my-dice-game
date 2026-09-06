@@ -66,6 +66,20 @@ export async function backendPatchCard(id: string, data: any): Promise<any | nul
 }
 
 // ---------- 角色卡 v2：轻量列表 / 分块懒加载 / 法术独立分页 ----------
+export async function backendFetchBestiary(): Promise<any[] | null> {
+  const r = await apiJson('GET', '/bestiary')
+  return r && r.ok === true && Array.isArray(r.data) ? r.data : null
+}
+
+export async function backendCreateBestiary(id: string, name: string, imagePath: string): Promise<any | null> {
+  const r = await apiJson('POST', '/bestiary', { id, name, image_path: imagePath })
+  return r && r.ok === true ? r : null
+}
+
+export async function backendDeleteBestiary(id: string): Promise<any | null> {
+  return apiJson('DELETE', `/bestiary/${encodeURIComponent(id)}`)
+}
+
 export async function backendDeleteCard(id: string): Promise<any | null> {
   return apiJson('DELETE', `/characters/${encodeURIComponent(id)}`)
 }

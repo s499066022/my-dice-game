@@ -38,17 +38,17 @@
 </template>
 
 <script lang="ts" setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getBackendBase } from '../api/characterBackend'
+import { getBackendBase, backendFetchBestiary, backendCreateBestiary, backendDeleteBestiary } from '../api/characterBackend'
+import { onBestiaryLive } from '../api/reverb'
 import { uid } from '../data/dndModel'
 
 const STORE_KEY = 'dnd-bestiary'
 interface MonsterImage {
   id: string
   name: string
-  path: string // 服务器 OSS path，展示经 /common/ossShowFile?path=
-  ts: number
+  image_path: string // 服务器 OSS path，展示经 /common/ossShowFile?path=
 }
 
 const items = ref<MonsterImage[]>([])
@@ -58,19 +58,33 @@ const lastErr = ref('')
 const preview = ref<MonsterImage | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
 
-function load() {
+function cache() {
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify(items.value))
+  } catch { /* 忽略 */ }
+}
+function useCache() {
   try {
     const s = localStorage.getItem(STORE_KEY)
-    items.value = s ? JSON.parse(s) : []
-  } catch {
-    items.value = []
-  }
+    if (s) items.value = JSON.parse(s)
+  } catch { /* 忽略 */ }
 }
-function save() {
-  localStorage.setItem(STORE_KEY, JSON.stringify(items.value))
+async function load() {
+  useCache() // 先展示本地缓存（离线/弱网也能看）
+  try {
+    const remote = await backendFetchBestiary()
+    if (remote) {
+      items.value = remote.map((r: any) => ({
+        id: r.id,
+        name: r.name || '',
+        image_path: r.image_path || '',
+      }))
+      cache()
+    }
+  } catch { /* 离线 */ }
 }
 function imgUrl(it: MonsterImage): string {
-  return `${getBackendBase()}/common/ossShowFile?path=${encodeURIComponent(it.path)}`
+  return `${getBackendBase()}/common/ossShowFile?path=${encodeURIComponent(it.image_path)}`
 }
 function pickFile() {
   fileInput.value?.click()
@@ -94,8 +108,11 @@ async function onFile(e: Event) {
     const j = await res.json()
     const path = j?.data?.path || j?.path
     if (!path) throw new Error('上传响应缺少 path：' + JSON.stringify(j).slice(0, 200))
-    items.value.push({ id: uid(), name, path, ts: Date.now() })
-    save()
+    const id = uid()
+    const ok = await backendCreateBestiary(id, name, path)
+    if (!ok) throw new Error('保存到后端失败')
+    items.value = [{ id, name, image_path: path }, ...items.value]
+    cache()
     newName.value = ''
     ElMessage.success(`已加入图鉴：${name}`)
   } catch (err) {
@@ -114,11 +131,28 @@ async function remove(it: MonsterImage) {
   } catch {
     return
   }
+  const delOk = await backendDeleteBestiary(it.id)
+  if (!delOk) {
+    ElMessage.error('删除失败（后端不可用？）')
+    return
+  }
   items.value = items.value.filter((x) => x.id !== it.id)
-  save()
+  cache()
 }
 
-onMounted(load)
+let offLive: (() => void) | null = null
+onMounted(() => {
+  load()
+  offLive = onBestiaryLive((list) => {
+    if (Array.isArray(list)) {
+      items.value = list.map((r: any) => ({ id: r.id, name: r.name || '', image_path: r.image_path || '' }))
+      cache()
+    }
+  })
+})
+onBeforeUnmount(() => {
+  if (offLive) offLive()
+})
 </script>
 
 <style scoped>

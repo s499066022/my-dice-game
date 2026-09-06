@@ -145,6 +145,35 @@ export function leaveReverb(sessionId: string): void {
   }
 }
 
+// ========== 怪物图鉴实时（presence-bestiary；BestiaryChanged 全量 items） ==========
+type BestiaryHandler = (items: any[]) => void
+let bestiaryChannel: any = null
+const bestiaryHandlers = new Set<BestiaryHandler>()
+
+export function onBestiaryLive(cb: BestiaryHandler): () => void {
+  bestiaryHandlers.add(cb)
+  const echo: any = (window as any).Echo
+  if (!echo || !echo.join) return () => bestiaryHandlers.delete(cb)
+  if (!bestiaryChannel) {
+    try {
+      logWs('sys', 'presence-bestiary', '加入频道')
+      bestiaryChannel = echo.join('bestiary')
+      bestiaryChannel.listen('.BestiaryChanged', (e: any) => {
+        const d = e?.data ?? e
+        const items = d?.items
+        logWs('in', 'presence-bestiary', '.BestiaryChanged', Array.isArray(items) ? `${items.length} 条` : summarize(d))
+        if (Array.isArray(items)) bestiaryHandlers.forEach((h) => { try { h(items) } catch { /* 忽略 */ } })
+      })
+      bestiaryChannel.here(() => logWs('sys', 'presence-bestiary', '订阅成功'))
+      bestiaryChannel.error?.(() => logWs('err', 'presence-bestiary', '订阅失败'))
+    } catch (e) {
+      logWs('err', 'presence-bestiary', '订阅异常', summarize(e))
+      bestiaryChannel = null
+    }
+  }
+  return () => bestiaryHandlers.delete(cb)
+}
+
 // ========== 团实时（presence-parties；后端 PartiesChanged 全量广播） ==========
 type PartiesHandler = (list: any[]) => void
 let partiesChannel: any = null
