@@ -4,6 +4,7 @@ import DiceView from '../views/diceView.vue'
 import CharacterManager from '../views/CharacterManager.vue'
 import PartyManager from '../views/PartyManager.vue'
 import HexMap from '../views/HexMap.vue'
+import BestiaryView from '../views/BestiaryView.vue'
 
 const routes: Array<RouteRecordRaw> = [
   {
@@ -25,6 +26,11 @@ const routes: Array<RouteRecordRaw> = [
     path: '/map',
     name: 'HexMap',
     component: HexMap
+  },
+  {
+    path: '/bestiary',
+    name: 'Bestiary',
+    component: BestiaryView
   },
   {
     path: '/',

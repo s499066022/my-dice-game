@@ -7,6 +7,7 @@
         <router-link to="/cards">🗂️ 角色卡</router-link>
         <router-link to="/party">👥 团</router-link>
         <router-link to="/map">🗺️ 地图</router-link>
+        <router-link to="/bestiary">👹 怪物图鉴</router-link>
       </div>
       <a class="external" href="https://5echm.kagangtuya.top/" target="_blank">
         5E 不全书 ↗
