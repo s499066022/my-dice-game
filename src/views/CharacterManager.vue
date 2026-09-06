@@ -86,24 +86,37 @@
     <div v-else class="cm-layout">
       <!-- 左侧：角色卡列表 -->
       <aside class="cm-list">
-        <div
-          v-for="card in cards"
-          :key="card.id"
-          class="cm-card-item"
-          :class="{ active: card.id === currentId }"
-          @click="currentId = card.id"
-        >
-          <div class="cm-card-name">{{ card.name || '未命名角色' }}</div>
-          <div class="cm-card-meta">
-            <span v-if="classSummary(card)">{{ classSummary(card) }}</span>
-            <span>HP {{ card.hp.current }}/{{ card.hp.max }}</span>
-            <span>AC {{ getTotalAC(card) }}</span>
+        <!-- 按团自动分组，可折叠某团下的全部角色卡 -->
+        <template v-for="g in cardGroups" :key="g.key">
+          <div class="cm-group">
+            <div class="cm-group-head" @click="toggleGroup(g.key)" :title="g.collapsed ? '展开该团角色卡' : '收起该团下所有角色卡'">
+              <span class="cm-group-caret">{{ g.collapsed ? '▶' : '▼' }}</span>
+              <span class="cm-group-name">{{ g.label }}</span>
+              <span class="cm-group-n">{{ g.cards.length }}</span>
+            </div>
+            <div v-show="!g.collapsed">
+              <div
+                v-for="card in g.cards"
+                :key="card.id"
+                class="cm-card-item"
+                :class="{ active: card.id === currentId }"
+                @click="currentId = card.id"
+              >
+                <div class="cm-card-name">{{ card.name || '未命名角色' }}</div>
+                <div class="cm-card-meta">
+                  <span v-if="classSummary(card)">{{ classSummary(card) }}</span>
+                  <span>HP {{ card.hp.current }}/{{ card.hp.max }}</span>
+                  <span>AC {{ getTotalAC(card) }}</span>
+                </div>
+                <div class="cm-card-actions" @click.stop>
+                  <el-button size="small" text @click="duplicateCard(card)">复制</el-button>
+                  <el-button size="small" text type="danger" @click="deleteCard(card)">删除</el-button>
+                </div>
+              </div>
+            </div>
           </div>
-          <div class="cm-card-actions" @click.stop>
-            <el-button size="small" text @click="duplicateCard(card)">复制</el-button>
-            <el-button size="small" text type="danger" @click="deleteCard(card)">删除</el-button>
-          </div>
-        </div>
+        </template>
+        <div v-if="!cards.length" class="cm-list-empty">还没有角色卡</div>
       </aside>
 
       <!-- 右侧：详情编辑 -->
@@ -597,10 +610,12 @@ import {
   backendPatchSpell,
   backendDeleteSpell,
   backendDeleteCard,
+  backendFetchParties,
   useBackendStatus,
 } from '../api/characterBackend'
-import { connectCharacterCards } from '../api/reverb'
+import { connectCharacterCards, onPartiesLive } from '../api/reverb'
 import { CARD_BLOCKS, BLOCK_OF_KEY, pickBlock, type CardBlock } from '../data/cardBlocks'
+import { loadParties } from '../data/partyModel'
 
 const STORAGE_KEY = 'dnd-character-cards'
 const CURRENT_KEY = 'dnd-character-cards-current'
@@ -613,6 +628,45 @@ const SPELL_STATUSES = ['未准备', '已准备', '已知', '常备', '专注']
 
 const cards = ref<CharacterCard[]>([])
 const currentId = ref('')
+// 按团自动分组：卡片 -> 所属团（后端 parties 优先，回退本地）；支持按团折叠
+const partyList = ref<{ id: string; name: string; memberIds: string[] }[]>([])
+const collapsedGroups = ref<Set<string>>(new Set())
+function toPartyLike(p: any) {
+  const members = Array.isArray(p.member_ids) ? p.member_ids : Array.isArray(p.memberIds) ? p.memberIds : []
+  return { id: String(p.id), name: p.name || '团', memberIds: members.map(String) }
+}
+async function loadPartyGroups() {
+  partyList.value = loadParties().map(toPartyLike)
+  try {
+    const remote = await backendFetchParties()
+    if (remote && remote.length) partyList.value = remote.map(toPartyLike)
+  } catch { /* 忽略 */ }
+}
+interface CardGroup {
+  key: string
+  label: string
+  collapsed: boolean
+  cards: CharacterCard[]
+}
+const cardGroups = computed<CardGroup[]>(() => {
+  const cardParty = new Map<string, string>()
+  partyList.value.forEach((p) => p.memberIds.forEach((id) => { if (!cardParty.has(id)) cardParty.set(id, p.id) }))
+  const partyById = new Map(partyList.value.map((p) => [p.id, p]))
+  const order: string[] = partyList.value.map((p) => p.id)
+  if (cards.value.some((c) => !cardParty.has(c.id))) order.push('__none__')
+  const groups: CardGroup[] = order.map((key) => {
+    const p = key === '__none__' ? null : partyById.get(key)
+    const list = cards.value.filter((c) => (p ? cardParty.get(c.id) === key : !cardParty.has(c.id)))
+    return { key, label: p ? p.name : '未入团', collapsed: collapsedGroups.value.has(key), cards: list }
+  })
+  return groups.filter((g) => g.cards.length)
+})
+function toggleGroup(key: string) {
+  const next = new Set(collapsedGroups.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  collapsedGroups.value = next
+}
 const activeTab = ref('combat')
 const fileInput = ref<HTMLInputElement | null>(null)
 const backendStatus = useBackendStatus()
@@ -989,6 +1043,7 @@ let hydrating = false
 let granular = 0
 let initUploadNeeded = false
 let cardChannelOff: (() => void) | null = null
+let offParties: (() => void) | null = null
 let wholePending = false
 const pendingBlocks = new Map<string, Set<CardBlock>>()
 const namePending = new Set<string>() // 改名走最小 PATCH {name}，绝不随战斗编辑整块携带 name
@@ -1427,6 +1482,7 @@ function loadWeaponLibrary() {
 // ========== 初始化 ==========
 async function init() {
   hydrating = true
+  loadPartyGroups()
   loadWeaponLibrary()
   const ok = await backendPing()
   backendStatus.value.status = ok ? 'online' : 'offline'
@@ -1496,6 +1552,9 @@ async function init() {
   localSave()
   if (mode.value === 'v2' && backendStatus.value.status === 'online') {
     watchCardsRealtime()
+    offParties = onPartiesLive((list) => {
+      if (Array.isArray(list)) partyList.value = list.map(toPartyLike)
+    })
   }
   maybeLoadTab()
   if (mode.value === 'v2' && backendStatus.value.status === 'online' && initUploadNeeded) {
@@ -1589,6 +1648,10 @@ onUnmounted(() => {
     cardChannelOff()
     cardChannelOff = null
   }
+  if (offParties) {
+    offParties()
+    offParties = null
+  }
 })
 </script>
 
@@ -1651,6 +1714,42 @@ onUnmounted(() => {
 }
 
 /* 左侧列表 */
+.cm-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  cursor: pointer;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #4f46e5;
+  font-weight: 600;
+  background: #eef2ff;
+  margin-bottom: 4px;
+  user-select: none;
+}
+.cm-group-head:hover {
+  background: #e0e7ff;
+}
+.cm-group-caret {
+  font-size: 10px;
+  width: 12px;
+}
+.cm-group-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cm-group-n {
+  color: #94a3b8;
+  font-weight: 500;
+}
+.cm-list-empty {
+  color: #9ca3af;
+  text-align: center;
+  padding: 20px 0;
+}
 .cm-list {
   display: flex;
   flex-direction: column;
