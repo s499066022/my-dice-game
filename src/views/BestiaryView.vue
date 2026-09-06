@@ -44,7 +44,6 @@ import { getBackendBase, backendFetchBestiary, backendCreateBestiary, backendDel
 import { onBestiaryLive } from '../api/reverb'
 import { uid } from '../data/dndModel'
 
-const STORE_KEY = 'dnd-bestiary'
 interface MonsterImage {
   id: string
   name: string
@@ -58,19 +57,9 @@ const lastErr = ref('')
 const preview = ref<MonsterImage | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
 
-function cache() {
-  try {
-    localStorage.setItem(STORE_KEY, JSON.stringify(items.value))
-  } catch { /* 忽略 */ }
-}
-function useCache() {
-  try {
-    const s = localStorage.getItem(STORE_KEY)
-    if (s) items.value = JSON.parse(s)
-  } catch { /* 忽略 */ }
-}
+// 完全以接口为准：不缓存、不读本地
 async function load() {
-  useCache() // 先展示本地缓存（离线/弱网也能看）
+  lastErr.value = ''
   try {
     const remote = await backendFetchBestiary()
     if (remote) {
@@ -79,9 +68,12 @@ async function load() {
         name: r.name || '',
         image_path: r.image_path || '',
       }))
-      cache()
+    } else {
+      lastErr.value = '后端不可用或返回异常'
     }
-  } catch { /* 离线 */ }
+  } catch (e) {
+    lastErr.value = '读取图鉴失败：' + String((e as any)?.message || e).slice(0, 120)
+  }
 }
 function imgUrl(it: MonsterImage): string {
   return `${getBackendBase()}/common/ossShowFile?path=${encodeURIComponent(it.image_path)}`
@@ -111,9 +103,8 @@ async function onFile(e: Event) {
     const id = uid()
     const ok = await backendCreateBestiary(id, name, path)
     if (!ok) throw new Error('保存到后端失败')
-    items.value = [{ id, name, image_path: path }, ...items.value]
-    cache()
     newName.value = ''
+    await load() // 以接口返回为准刷新列表
     ElMessage.success(`已加入图鉴：${name}`)
   } catch (err) {
     lastErr.value = '上传失败：' + String((err as any)?.message || err).slice(0, 160)
@@ -136,8 +127,7 @@ async function remove(it: MonsterImage) {
     ElMessage.error('删除失败（后端不可用？）')
     return
   }
-  items.value = items.value.filter((x) => x.id !== it.id)
-  cache()
+  await load() // 以接口返回为准刷新列表
 }
 
 let offLive: (() => void) | null = null
@@ -146,7 +136,6 @@ onMounted(() => {
   offLive = onBestiaryLive((list) => {
     if (Array.isArray(list)) {
       items.value = list.map((r: any) => ({ id: r.id, name: r.name || '', image_path: r.image_path || '' }))
-      cache()
     }
   })
 })
