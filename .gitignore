@@ -28,5 +28,7 @@ dist-ssr
 
 # 法术库原始 xlsx（已转换进 src/data/spellLibrary.json）
 m.xlsx
+# 角色卡模板 xlsx（仅作为需求/数据源参考，不入库）
+1.xlsx
 
 .npm-cache/
