@@ -602,6 +602,7 @@ import {
   backendPing,
   backendFetchAll,
   backendReplaceAll,
+  backendUpsertCard,
   backendFetchLightCharacters,
   backendFetchCardBlock,
   backendPatchCardBlock,
@@ -800,6 +801,7 @@ async function deleteCard(card: CharacterCard) {
   const idx = cards.value.findIndex((c) => c.id === card.id)
   if (idx === -1) return
   cards.value.splice(idx, 1)
+  forgetCardBlocks(card.id)
   if (currentId.value === card.id) currentId.value = cards.value[0]?.id ?? ''
   if (mode.value === 'v2' && backendStatus.value.status === 'online') {
     // v2：DELETE /characters/{id}（后端连带删 character_spells 并广播 CharacterCardRemoved）
@@ -1041,12 +1043,56 @@ let syncTimer: ReturnType<typeof setTimeout> | null = null
 let hydrating = false
 // granular: 0=未探测 1=后端支持单卡分块 2=不支持(每次回退整库)
 let granular = 0
-let initUploadNeeded = false
 let cardChannelOff: (() => void) | null = null
 let offParties: (() => void) | null = null
 let wholePending = false
+// 读取服务器失败时暂停写回：宁可本地暂存，也绝不用残缺的本地视图覆盖服务器数据
+let readOnlyRemote = false
+let readOnlyWarned = false
 const pendingBlocks = new Map<string, Set<CardBlock>>()
 const namePending = new Set<string>() // 改名走最小 PATCH {name}，绝不随战斗编辑整块携带 name
+// cardId -> 已知的服务端时间（载入 light 时 / 本地写入成功时刷新），用于判断“本地是否比服务端新”
+const serverTs = new Map<string, number>()
+// 已加载块持久化：跨刷新记住本地缓存里“真正有数据的块”，整卡保存时只推这些块，避免把默认值覆盖到服务端
+const BLOCKS_KEY = 'dnd-character-cards-blocks'
+let blockFetched = new Set<string>() // 本次会话已从服务端拉过的 "cardId|block"（避免重复 GET）
+
+function loadBlockMap(): Record<string, string[]> {
+  try {
+    const raw = localStorage.getItem(BLOCKS_KEY)
+    const obj = raw ? JSON.parse(raw) : null
+    return obj && typeof obj === 'object' ? obj : {}
+  } catch {
+    return {}
+  }
+}
+function persistBlockMap() {
+  try {
+    const out: Record<string, string[]> = {}
+    blockLoaded.forEach((set, id) => {
+      out[id] = [...set]
+    })
+    localStorage.setItem(BLOCKS_KEY, JSON.stringify(out))
+  } catch {
+    /* 忽略 */
+  }
+}
+function markBlockLoaded(id: string, block: CardBlock) {
+  const set = blockLoaded.get(id) || new Set<CardBlock>()
+  set.add(block)
+  blockLoaded.set(id, set)
+  persistBlockMap()
+}
+function forgetCardBlocks(id: string) {
+  blockLoaded.delete(id)
+  serverTs.delete(id)
+  persistBlockMap()
+}
+function isLocalNewer(card: CharacterCard): boolean {
+  const lr = new Date(card.updatedAt || 0).getTime() || 0
+  const rr = serverTs.get(card.id) || 0
+  return lr > rr + 1000
+}
 
 function changedBlocks(oldCard: any, newCard: any): Set<CardBlock> {
   const set = new Set<CardBlock>()
@@ -1119,18 +1165,30 @@ function scheduleSync(nv: CharacterCard[]) {
 
 async function flushSync() {
   if (backendStatus.value.status !== 'online') return
+  if (readOnlyRemote) {
+    if (!readOnlyWarned) {
+      readOnlyWarned = true
+      ElMessage.warning('本次没能从服务器读到角色卡，已暂停写回（改动保存在本地，刷新页面重试）')
+    }
+    return
+  }
   if (wholePending) {
     wholePending = false
     pendingBlocks.clear()
-    await pushToBackendWhole(true, true)
+    await pushCardsToBackend(cards.value, true, true)
     return
   }
   if (!pendingBlocks.size) return
   const batch = [...pendingBlocks.entries()]
   pendingBlocks.clear()
-  // legacy/不支持块端点：直接整库
+  // legacy/不支持块端点：逐卡增量保存（绝不整库覆盖）
   if (granular === 2 || mode.value === 'legacy') {
-    await pushToBackendWhole(true, true)
+    const changed: CharacterCard[] = []
+    batch.forEach(([id]) => {
+      const card = cards.value.find((c) => c.id === id)
+      if (card) changed.push(card)
+    })
+    await pushCardsToBackend(changed, true, true)
     return
   }
   // 改名：单独最小 PATCH {name}（后端浅合并），避免“旧 name 随战斗编辑反向广播覆盖”
@@ -1143,14 +1201,14 @@ async function flushSync() {
       const r = await backendPatchCardBlock(id, 'combat', { name: card.name })
       if (r && r.ok === true) {
         granular = 1
+        serverTs.set(id, Date.now())
         markSynced()
       } else {
-        await pushToBackendWhole(true, true)
-        granular = 2
+        await pushCardsToBackend([card], true, true)
       }
     }
   }
-  let usedWholeFallback = false
+  const failedCards: CharacterCard[] = []
   outer: for (const [id, blocks] of batch) {
     const card = cards.value.find((c) => c.id === id)
     if (!card) continue
@@ -1158,32 +1216,46 @@ async function flushSync() {
       const data = pickBlock(card, b)
       delete data.name // name 已走独立通道
       if (!Object.keys(data).length) continue
-      let r = await backendPatchCardBlock(id, b, data)
+      const r = await backendPatchCardBlock(id, b, data)
       if (r && r.ok === true) {
         granular = 1
+        serverTs.set(id, Date.now())
         markSynced()
         continue
       }
-      // 失败：先整库覆盖一次（v2 会用远端整卡打底），再重试一次判断端点是否可用
-      if (!usedWholeFallback) {
-        usedWholeFallback = true
-        await pushToBackendWhole(true, true)
-      }
-      r = await backendPatchCardBlock(id, b, data)
-      if (r && r.ok === true) {
-        granular = 1
-        markSynced()
-        continue
-      }
+      // 块端点不可用/失败：退回“单卡增量保存”（安全，不会删除别的卡）
       granular = 2
-      // 上面已做过一次整库覆盖兜底（内容已上传），无需再推一次
+      failedCards.push(card)
       break outer
     }
   }
+  if (failedCards.length) await pushCardsToBackend(failedCards, true, true)
 }
 
-// 整库覆盖（按钮「整卡同步」/ 新建/导入/删除/回退路径）
-async function pushToBackendWhole(force = false, silent = false) {
+// 单卡增量保存内容：v2 只带“本地确有数据的块”（服务端浅合并，未传的块保持原值）；legacy 带整卡
+function buildCardPayload(card: CharacterCard): any {
+  const payload: any = { id: card.id, name: card.name, updatedAt: card.updatedAt || new Date().toISOString() }
+  const loaded = blockLoaded.get(card.id)
+  const blocks = mode.value === 'v2'
+    ? (loaded && loaded.size ? [...loaded] : (['combat'] as CardBlock[]))
+    : CARD_BLOCKS_KEYS_ALL
+  blocks.forEach((b) => {
+    Object.assign(payload, pickBlock(card, b))
+  })
+  // classes 属于 basic 块：只有该块在本地确有数据时才带，避免用残缺本地的默认职业覆盖服务端
+  if (blocks.includes('basic')) {
+    payload.classes = (card.classes || []).filter((cl) => (cl.name && cl.name.trim()) || cl.level !== 1)
+  }
+  return payload
+}
+
+/**
+ * 增量保存若干张卡（单卡 upsert，绝不整库删除）。
+ * - 服务器读取失败时直接放弃并进入只读缓存模式，避免用残缺本地覆盖服务器
+ * - 只有后端不支持单卡 upsert 时，才退回“先读全量 → 合并后整体提交”
+ */
+async function pushCardsToBackend(list: CharacterCard[], force = false, silent = false) {
+  if (!list.length) return
   if (backendStatus.value.status !== 'online') {
     if (!force) {
       backendStatus.value.status = 'offline'
@@ -1194,54 +1266,65 @@ async function pushToBackendWhole(force = false, silent = false) {
     backendStatus.value.checking = false
     if (!ok) {
       backendStatus.value.status = 'offline'
-      if (!silent) ElMessage.warning('后端离线，已保存到本地')
+      if (!silent) ElMessage.warning('后端离线，已保存在本地')
       return
     }
     backendStatus.value.status = 'online'
   }
+  if (readOnlyRemote) {
+    if (!readOnlyWarned) {
+      readOnlyWarned = true
+      ElMessage.warning('本次没能从服务器读到角色卡，已暂停写回（改动保存在本地，刷新页面重试）')
+    }
+    return
+  }
   backendStatus.value.checking = true
-  // 发送清洗后的数据（移除未填写的空职业行）
-  let toSend = cards.value.map((c) => ({
-    ...c,
-    classes: (c.classes || []).filter((cl) => (cl.name && cl.name.trim()) || cl.level !== 1),
-  }))
-  if (mode.value === 'v2') {
-    // 整库覆盖必须“按已加载块合并”，否则本地未加载块的默认值会覆盖服务端真实数据。
-    // 规则：以服务端整卡为底；本地已加载(blockLoaded)的块用本地值覆盖；combat 恒用本地；其余保留服务端。
-    try {
-      const remote = await backendFetchAll()
-      if (Array.isArray(remote) && remote.length) {
-        const byId = new Map(remote.map((r: any) => [r.id, r]))
-        toSend = toSend.map((c) => {
-          const r = byId.get(c.id)
-          if (!r) return c // 本地新增卡：整卡上传（无服务端数据可冲突）
-          const out: any = JSON.parse(JSON.stringify(r))
-          const loaded = blockLoaded.get(c.id)
-          const applyBlock = (blk: string) => {
-            ;(CARD_BLOCKS[blk as CardBlock] || []).forEach((k) => {
-              if (k in c) out[k] = (c as any)[k]
-            })
-          }
-          if (!loaded) {
-            applyBlock('combat') // 未知：至少同步战斗核心（含 name/hp/AC/先攻）
-          } else {
-            ;(CARD_BLOCKS_KEYS_ALL as string[]).forEach((blk) => {
-              if (loaded.has(blk as CardBlock)) applyBlock(blk)
-            })
-          }
-          return out
-        })
-      }
-    } catch (e) {
-      /* 忽略，用本地 */
+  const failed: CharacterCard[] = []
+  for (const card of list) {
+    const r = await backendUpsertCard(buildCardPayload(card))
+    if (r && r.ok === true) {
+      serverTs.set(card.id, Date.now())
+      markSynced()
+    } else if (r && (r.httpStatus === 404 || r.httpStatus === 405)) {
+      // 老后端没有单卡 upsert：走“读全量 → 合并 → 整体提交”（不会删掉服务器上已有的卡）
+      await pushWholeLibraryFallback(silent)
+      backendStatus.value.checking = false
+      return
+    } else {
+      failed.push(card)
     }
   }
-  const ok = await backendReplaceAll(toSend)
   backendStatus.value.checking = false
+  if (failed.length) {
+    backendStatus.value.error = '写入后端失败，已保留在本地'
+    if (!silent) ElMessage.error(`${failed.length} 张角色卡写入失败，已保留在本地`)
+  }
+}
+
+// 老后端兼容：先读服务端全量，与本地合并后再整体提交（绝不“清空重写”）
+async function pushWholeLibraryFallback(silent = false) {
+  const remote = await backendFetchAll()
+  if (!Array.isArray(remote)) {
+    readOnlyRemote = true
+    backendStatus.value.error = '读取服务器角色卡失败，已暂停写回'
+    if (!silent) ElMessage.error('读取服务器角色卡失败，已暂停写回（改动保存在本地）')
+    return
+  }
+  const byId = new Map<string, any>(remote.map((r: any) => [r.id, r]))
+  const merged = cards.value.map((c) => {
+    const r = byId.get(c.id)
+    if (!r) return buildCardPayload(c)
+    const out: any = { ...r }
+    const loaded = blockLoaded.get(c.id)
+    const blocks = loaded && loaded.size ? [...loaded] : (['combat'] as CardBlock[])
+    blocks.forEach((b) => Object.assign(out, pickBlock(c, b)))
+    return out
+  })
+  const ok = await backendReplaceAll(merged)
   if (ok) {
+    cards.value.forEach((c) => serverTs.set(c.id, Date.now()))
     markSynced()
   } else {
-    backendStatus.value.status = 'offline'
     backendStatus.value.error = '写入后端失败，已保留在本地'
     if (!silent) ElMessage.error('写入后端失败，已保留在本地')
   }
@@ -1280,11 +1363,28 @@ function mergeBlockIntoCard(card: CharacterCard, block: CardBlock, data: any) {
     const v = (data as any)?.[k]
     if (v !== undefined && v !== null) (card as any)[k] = v // null 视为“未提供”，不覆盖默认
   })
+  if (block === 'features') normalizeFeatureLists(card)
   sanitizeCardNulls(card)
+}
+
+// 特性条目的 level 可能来自旧数据/被输入框清空(null)：统一归 0，避免“等级消失”
+const FEATURE_LIST_KEYS = ['classFeatures', 'racialFeatures', 'feats', 'specialAbilities'] as const
+function normalizeFeatureLists(card: CharacterCard) {
+  FEATURE_LIST_KEYS.forEach((k) => {
+    const arr = (card as any)[k]
+    if (!Array.isArray(arr)) return
+    ;(card as any)[k] = arr.map((f: any) => ({
+      id: f?.id ?? uid(),
+      level: typeof f?.level === 'number' && isFinite(f.level) ? f.level : Number(f?.level) || 0,
+      name: f?.name ?? '',
+      description: f?.description ?? '',
+    }))
+  })
 }
 
 function markCardFull(id: string) {
   blockLoaded.set(id, new Set<CardBlock>(CARD_BLOCKS_KEYS_ALL))
+  persistBlockMap()
 }
 const CARD_BLOCKS_KEYS_ALL = Object.keys(CARD_BLOCKS) as CardBlock[]
 
@@ -1295,19 +1395,33 @@ async function maybeLoadTab() {
   if (!card || backendStatus.value.status !== 'online') return
   const block = TAB_TO_BLOCK[activeTab.value]
   if (!block || block === 'combat') return
-  if (blockLoaded.get(card.id)?.has(block)) return
+  const fetchKey = `${card.id}|${block}`
+  if (blockFetched.has(fetchKey)) return
+  if (readOnlyRemote) return
+  blockFetched.add(fetchKey)
   let data: any = null
+  const beforeJson = JSON.stringify(card)
   try {
     data = await backendFetchCardBlock(card.id, block)
   } catch (e) {
     /* 忽略：懒加载失败不阻塞切换 */
   }
-  if (!data) return
+  if (!data) {
+    blockFetched.delete(fetchKey) // 失败允许重试
+    return
+  }
+  // 本地比服务端新（有未成功写回的改动）时，以本地为准，绝不用服务端旧块覆盖
+  const localChanged = JSON.stringify(card) !== beforeJson
+  if (localChanged || isLocalNewer(card)) {
+    markBlockLoaded(card.id, block)
+    cardsSnap = JSON.stringify(cards.value)
+    if (block === 'spellconfig') loadSpells(spellsPage.value)
+    return
+  }
   mergeBlockIntoCard(card, block, data)
-  const set = blockLoaded.get(card.id) || new Set<CardBlock>()
-  set.add(block)
-  blockLoaded.set(card.id, set)
+  markBlockLoaded(card.id, block)
   cardsSnap = JSON.stringify(cards.value) // 懒加载不算本地变更，避免回推
+  localSave() // 同步写入本地缓存：blockLoaded 声称“本地有数据”，缓存里就必须真的有
   if (block === 'spellconfig') loadSpells(spellsPage.value)
 }
 
@@ -1420,25 +1534,35 @@ async function removeSpellV2(s: any) {
 // ---------- 角色卡实时（presence-characters） ----------
 function onCardRealtimeUpdated(id: string, block: string, data: any) {
   const card = cards.value.find((c) => c.id === id)
-  if (!card) return
+  if (!card || !data) return
   const b = (block && CARD_BLOCKS[block as CardBlock]) ? (block as CardBlock) : null
   if (b) {
     mergeBlockIntoCard(card, b, data)
-    const set = blockLoaded.get(id) || new Set<CardBlock>()
-    set.add(b)
-    blockLoaded.set(id, set)
+    markBlockLoaded(id, b)
+  } else if (data.id && data.id !== id) {
+    return // 防御：广播里的 id 对不上
   } else {
-    Object.keys(data || {}).forEach((k) => {
-      ;(card as any)[k] = data[k]
+    // 未知块（老后端整卡广播）：只并入“对方真的带了值”的键，绝不用空值覆盖本地
+    Object.keys(data).forEach((k) => {
+      const v = (data as any)[k]
+      if (v === undefined || v === null) return
+      if (Array.isArray(v) && !v.length) return // 空数组视为未提供
+      ;(card as any)[k] = v
     })
+    normalizeFeatureLists(card)
   }
+  if (data.name !== undefined) card.name = data.name
+  serverTs.set(id, Date.now()) // 服务端刚广播过，说明服务端与本次广播同步
   cardsSnap = JSON.stringify(cards.value) // 避免把远端更新当成自己变更再回推
+  localSave()
 }
 function onCardRealtimeRemoved(id: string) {
   const i = cards.value.findIndex((c) => c.id === id)
   if (i >= 0) cards.value.splice(i, 1)
+  forgetCardBlocks(id)
   if (currentId.value === id) currentId.value = cards.value[0]?.id ?? ''
   cardsSnap = JSON.stringify(cards.value)
+  localSave()
 }
 function watchCardsRealtime() {
   cardChannelOff = connectCharacterCards({
@@ -1482,10 +1606,13 @@ function loadWeaponLibrary() {
 // ========== 初始化 ==========
 async function init() {
   hydrating = true
+  blockFetched = new Set<string>()
   loadPartyGroups()
   loadWeaponLibrary()
   const ok = await backendPing()
   backendStatus.value.status = ok ? 'online' : 'offline'
+  const savedBlocks = loadBlockMap()
+  const uploadList: CharacterCard[] = []
   if (ok) {
     const light = await backendFetchLightCharacters()
     if (light && light.length) {
@@ -1493,8 +1620,9 @@ async function init() {
       const localCards = loadLocalCards()
       const localById = new Map(localCards.map((c) => [c.id, c]))
       const merged: CharacterCard[] = []
-      let uploadNeeded = false
       light.forEach((r: any) => {
+        const rTime = new Date(r.updatedAt || '').getTime() || 0
+        serverTs.set(String(r.id), rTime)
         const l = localById.get(r.id)
         if (!l) {
           merged.push(lightToCard(r)) // 服务端新卡 -> light 进入
@@ -1502,8 +1630,7 @@ async function init() {
         }
         // 本地缓存卡存在：保留本地已加载的块/离线改动
         const lr = new Date(l.updatedAt || 0).getTime()
-        const rr = new Date(r.updatedAt || '').getTime() || 0
-        if (rr > lr) {
+        if (rTime > lr) {
           // 服务端较新：combat 以服务端为准，其余块保留本地缓存（随后续懒加载/广播更新）
           const base = normalizeCharacterCard({ ...l })!
           ;(CARD_BLOCKS.combat || []).forEach((k) => {
@@ -1512,21 +1639,29 @@ async function init() {
           merged.push(base)
         } else {
           // 本地较新/相同：保留本地（含离线期间的编辑），并触发一次上传把差异推到服务端
-          merged.push(normalizeCharacterCard({ ...l })!)
-          if (lr > rr) uploadNeeded = true
+          const card = normalizeCharacterCard({ ...l })!
+          merged.push(card)
+          if (lr > rTime) uploadList.push(card)
         }
       })
       // 本地有、服务端没有的卡（离线新建/未上传）也要保留并上传
       light.forEach((r: any) => localById.delete(r.id))
       localById.forEach((c) => {
-        merged.push(normalizeCharacterCard({ ...c })!)
-        uploadNeeded = true
+        const card = normalizeCharacterCard({ ...c })!
+        merged.push(card)
+        uploadList.push(card)
+        markCardFull(card.id)
       })
       cards.value = merged
+      // 跨刷新恢复“本地缓存里真正有数据的块”（整卡保存只推这些块，其余块留给服务端）
       blockLoaded.clear()
-      cards.value.forEach((c) => blockLoaded.set(c.id, new Set<CardBlock>(['combat'])))
-      initUploadNeeded = uploadNeeded
+      cards.value.forEach((c) => {
+        const saved = savedBlocks[c.id]
+        blockLoaded.set(c.id, new Set<CardBlock>(Array.isArray(saved) && saved.length ? (saved as CardBlock[]) : ['combat']))
+      })
+      persistBlockMap()
     } else {
+      // light 不可用/为空：退回整卡列表（老后端兼容）
       mode.value = 'legacy'
       granular = 2
       const remote = await backendFetchAll()
@@ -1534,13 +1669,20 @@ async function init() {
         cards.value = remote.map(normalizeCharacterCard).filter((c): c is NormalizedCard => c !== null)
         blockLoaded.clear()
         cards.value.forEach((c) => markCardFull(c.id))
+      } else if (remote === null) {
+        // 连得上但读不到任何卡片：不要用本地残缺数据覆盖服务器
+        readOnlyRemote = true
+        loadLocal()
+        backendStatus.value.error = '读取服务器角色卡失败：已暂停写回，改动只保存在本地'
       } else {
+        // 服务器确实没有角色卡：沿用本地缓存
         loadLocal()
       }
     }
   } else {
     mode.value = 'legacy'
     granular = 2
+    readOnlyRemote = true // 后端离线：只用本地缓存，恢复后也不盲目覆盖服务器
     loadLocal()
     backendStatus.value.error = '后端不可用，已使用本地存储'
   }
@@ -1557,10 +1699,9 @@ async function init() {
     })
   }
   maybeLoadTab()
-  if (mode.value === 'v2' && backendStatus.value.status === 'online' && initUploadNeeded) {
-    initUploadNeeded = false
+  if (backendStatus.value.status === 'online' && !readOnlyRemote && uploadList.length) {
     try {
-      await pushToBackendWhole(true, true) // 把本地较新/离线新建的差异推给服务端
+      await pushCardsToBackend(uploadList, true, true) // 只推本地较新/离线新建的卡，绝不整库覆盖
     } catch (e) {
       /* 忽略 */
     }
@@ -1640,10 +1781,28 @@ function onCurrentIdChange() {
 watch(currentId, onCurrentIdChange)
 watch([activeTab, currentId], () => maybeLoadTab())
 
+// 页面隐藏/离开前尽量把待写内容刷出去（本地缓存已即时保存，这里只是让服务端尽快同步）
+function flushBeforeLeave() {
+  if (syncTimer) {
+    clearTimeout(syncTimer)
+    syncTimer = null
+  }
+  flushSync().catch(() => {
+    /* 忽略：页面正在卸载 */
+  })
+}
+function onVisibilityChange() {
+  if (document.visibilityState === 'hidden') flushBeforeLeave()
+}
+
 onMounted(() => {
   init()
+  document.addEventListener('visibilitychange', onVisibilityChange)
+  window.addEventListener('pagehide', flushBeforeLeave)
 })
 onUnmounted(() => {
+  document.removeEventListener('visibilitychange', onVisibilityChange)
+  window.removeEventListener('pagehide', flushBeforeLeave)
   if (cardChannelOff) {
     cardChannelOff()
     cardChannelOff = null

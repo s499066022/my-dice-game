@@ -45,7 +45,9 @@
 | PATCH | `/api/characters/{id}/blocks/{block}` | `{"data":{...}}` | 顶层**浅合并**进 payload（行锁），成功广播 `CharacterCardUpdated`；404=卡不存在 |
 | DELETE | `/api/characters/{id}` | — | 删除卡 + 连带删除 `character_spells`，广播 `CharacterCardRemoved` |
 | GET | `/api/characters` | — | 整卡列表（导出/迁移/兼容保留） |
-| POST | `/api/characters/sync` | `{"data":[<CharacterCard>...]}` | **整库覆盖**（事务清空重写；自动把 payload.spells 抽到 character_spells）→ 仅导入/迁移/兜底用 |
+| GET | `/api/characters/{id}` | — | 单卡整体（payload + `spells` 数组 + `updatedAt`） |
+| POST | `/api/characters` | `<CharacterCard>`（可只带部分块） | **单卡 upsert（推荐）**：不存在→新建；已存在→payload 顶层浅合并（只覆盖带来的键）。自动 splitSpells，返回 `{"ok":true,"data":{"id":..,"created":bool}}` |
+| POST | `/api/characters/sync` | `{"data":[<CharacterCard>...], "replace"?:false}` | **默认 upsert 合并（不会删除其它卡）**；显式 `"replace":true` 才是旧的“清空重写”（仅迁移用） |
 
 **LightCard**（= combat 块字段 + 元数据；含 AC 三要素与 abilities，客户端据此可算 AC/先攻）：
 ```jsonc
@@ -72,8 +74,11 @@
 | `wealth` | money, weightCapacity, note |
 
 > - 浅合并 = `$payload = array_merge($payload, $data)`（数组/对象整块替换）；建议行锁（实现已 lockForUpdate）。
-> - `name` 随 light/整卡返回；改名字段随 `combat` 块 PATCH 一起传即可（merge 不做块白名单过滤）。
-> - 新建卡（本地有、远端无）→ PATCH 404 → 前端自动整库 `sync` 补建一次再重试。
+> - `name` 随 light/整卡返回；改名随 `combat` 块 PATCH 或 `POST /characters` 传即可（两者都会同步 `characters.name` 列）。
+> - **数据安全（重要）**：客户端日常保存只走“块 PATCH / 单卡 upsert”，**永不整库覆盖**；
+>   且客户端会持久化“本地缓存里真正有数据的块”（localStorage `dnd-character-cards-blocks`），整卡保存只推送这些块，
+>   未加载的块保留服务端原值；读取服务器失败时进入**只读缓存模式**，暂停写回，避免用残缺本地覆盖服务器。
+> - 新建卡（本地有、远端无）→ `POST /api/characters` 直接创建（不再需要整库 sync 兜底）。
 
 ### 2.1 法术（独立表 character_spells，分页 CRUD）
 
@@ -232,7 +237,7 @@
 1. 后端部署：拉取 `chain` main 后执行迁移（已含 character_spells）并启动 Reverb（`php artisan reverb:start`，容器内 `--host=0.0.0.0 --port=8080`，nginx `/app` 反代）。
 2. CORS 需包含 PATCH/DELETE 与 `X-Dnd-User`（config/cors.php 已更新）。
 3. Reverb/Pusher 消息约 10KB 上限：payload 精简 + 分块同步即为此设计。
-4. `characters/sync`、`parties/sync` 为整库覆盖：仅供迁移/导入/离线兜底；日常编辑走块/单条接口。多人协作前建议先拉后改（前端已自动拉取合并）。
+4. `characters/sync` 默认已改为 upsert 合并（`replace:true` 才清空重写）；`parties/sync` 仍是整库覆盖——日常编辑请走块/单卡接口。多人协作前建议先拉后改（前端已自动拉取合并）。
 5. 本地联调速查：
 ```bash
 curl http://localhost:12226/api/ping
@@ -246,7 +251,7 @@ curl "http://localhost:12226/api/characters/{id}/spells?page=1&per_page=20&level
 
 | 接口 | 状态 | 冲突点与处置 |
 |---|---|---|
-| GET/POST `/characters`、`/characters/sync` | 兼容保留（导出/迁移/离线兜底） | **与块级 PATCH 并存时可能互相覆盖**：sync 是整库 delete+insert。前端已做“块级安全合并”（以服务端整卡为底，仅用本地**已加载块**覆盖，其余块保留服务端），并把 sync 限制在迁移/导入/本地较新时。仍属 last-write-wins：请勿多个设备同时整卡同步。 |
+| GET/POST `/characters`、`/characters/sync` | 兼容保留（导出/迁移/离线兜底） | 已消除“整库 delete+insert 误删”风险：`POST /characters` 单卡 upsert；`sync` 默认只合并、不删除（`replace:true` 才清空）。前端保存已全部改为块 PATCH / 单卡 upsert，并持久化“已加载块”，未加载块不会被本地默认值覆盖。仍属 last-write-wins：同一卡同一块多人同时改，后者覆盖前者。 |
 | `characters/sync` 无广播 | 已知边界 | 整库覆盖后其它在线端不会实时刷新（无事件）。日常编辑请走 blocks/spells；确需整卡同步后，其它端刷新或等下次块广播。 |
 | 旧 `payload.spells` 与新 `character_spells` | 双轨 | `sync` 会幂等抽离：该卡已有法术行则只清空 payload.spells；无行则按 id/生成 id 插入。老数据建议在任一设备点一次“整卡同步”完成抽离。 |
 | DELETE `/characters/{id}` | v2 | 连带删 character_spells；**不级联**清理 party.member_ids——团里会留下失效 id，地图对账会按 ref_id 自动忽略，团页显示时前端跳过。 |

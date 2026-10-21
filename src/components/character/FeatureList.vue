@@ -5,7 +5,7 @@
       <div v-for="f in items" :key="f.id" class="fl-row">
         <div class="fl-lv">
           <span class="fl-lv-label">级</span>
-          <el-input-number v-model="f.level" :min="0" :max="99" size="small" controls-position="right" />
+          <el-input-number v-model="f.level" :min="0" :max="99" :value-on-clear="0" size="small" controls-position="right" @change="onLevelChange(f, $event)" />
         </div>
         <div class="fl-main">
           <div class="fl-top">
@@ -32,6 +32,11 @@ const props = defineProps<{
 
 function add() {
   props.items.push({ id: uid(), level: 0, name: '', description: '' })
+}
+
+// 输入框被清空时 Element Plus 会给 null —— 这里兜回 0，避免“等级消失”
+function onLevelChange(f: FeatureEntry, v: number | null | undefined) {
+  f.level = typeof v === 'number' && isFinite(v) ? v : 0
 }
 
 function remove(f: FeatureEntry) {

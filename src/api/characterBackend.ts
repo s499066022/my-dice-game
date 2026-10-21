@@ -65,6 +65,20 @@ export async function backendPatchCard(id: string, data: any): Promise<any | nul
   return apiJson('PATCH', `/characters/${encodeURIComponent(id)}`, { data })
 }
 
+/**
+ * 单卡增量保存（upsert）：只写这张卡，绝不删除别的卡。
+ * 服务端对已存在的卡做 payload 顶层浅合并 —— 因此只传“本地确有数据”的块即可，未传的块保持服务端原值。
+ */
+export async function backendUpsertCard(card: any): Promise<any | null> {
+  return apiJson('POST', '/characters', card)
+}
+
+/** 单卡整体读取（含 spells） */
+export async function backendFetchCard(id: string): Promise<any | null> {
+  const r = await apiJson('GET', `/characters/${encodeURIComponent(id)}`)
+  return r && r.ok === true && r.data ? r.data : null
+}
+
 // ---------- 角色卡 v2：轻量列表 / 分块懒加载 / 法术独立分页 ----------
 export async function backendFetchBestiary(): Promise<any[] | null> {
   const r = await apiJson('GET', '/bestiary')
