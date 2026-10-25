@@ -107,11 +107,14 @@
 | 方法 | 路径 | 请求体 | 返回/说明 |
 |---|---|---|---|
 | GET | `/api/parties` | — | `{"ok":true,"data":[<Party>...]}`（updated_at 倒序） |
-| POST | `/api/parties/sync` | `{"data":[<Party>...]}` | **整库覆盖**（事务清空重写）；成功后广播 `PartiesChanged`（presence-parties）→ `{"ok":true,"count":N}` |
+| POST | `/api/parties` | `<Party>`（可只带 id/name/member_ids） | **单团 upsert（推荐）**：不存在→新建，已存在→payload 浅合并；返回 `{"ok":true,"data":{"id":..,"created":bool}}`；广播完整团列表 |
+| DELETE | `/api/parties/{id}` | — | 删除该团（404=不存在）；广播完整团列表 |
+| POST | `/api/parties/sync` | `{"data":[<Party>...], "replace"?:false}` | 默认 **upsert 合并（不删除其它团）**；`"replace":true` 才是旧的整体重写（仅迁移用）→ `{"ok":true,"count":N,"replace":bool}` |
 
 **Party**：`{"id":"...","name":"团 1","dm_user_id":"...","member_ids":["卡id"...],"created_at","updated_at"}`
 （payload 原样存储；member 键名兼容 `member_ids` / `memberIds`）。
-> **团 id = 战斗会话 id**。团数据低变更，实时用「整库广播 + 各端整体刷新」即可；删除/改名也会随全量广播扩散。
+> **团 id = 战斗会话 id**。实时用「整库广播 + 各端整体刷新」；前端平时只推**变化的那几个团**（upsert / DELETE），
+> 绝不会用本地残缺列表整库覆盖（老后端 404 时才回退整体发布）。
 > 实时频道：**presence-parties**，事件 `PartiesChanged` 载荷 `{parties:[<Party>...]}`。
 
 ---
