@@ -79,6 +79,12 @@ export async function backendFetchCard(id: string): Promise<any | null> {
   return r && r.ok === true && r.data ? r.data : null
 }
 
+/** 服务端整卡复制（含法术行，新的 id） —— 复制不会因为本地只加载了部分块而丢数据 */
+export async function backendCloneCard(id: string, name?: string): Promise<any | null> {
+  const r = await apiJson('POST', `/characters/${encodeURIComponent(id)}/clone`, name ? { name } : {})
+  return r && r.ok === true && r.data ? r.data : null
+}
+
 // ---------- 角色卡 v2：轻量列表 / 分块懒加载 / 法术独立分页 ----------
 export async function backendFetchBestiary(): Promise<any[] | null> {
   const r = await apiJson('GET', '/bestiary')

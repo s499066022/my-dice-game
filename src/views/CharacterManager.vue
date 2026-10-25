@@ -339,7 +339,10 @@
                   <div class="cm-def-row"><span class="cm-def-label">名称</span><el-input v-model="currentCard.armor.name" placeholder="如 铠甲" /></div>
                   <div class="cm-def-row"><span class="cm-def-label">AC 值</span><el-input-number v-model="currentCard.armor.ac" :min="0" :max="99" /></div>
                   <div class="cm-def-row"><span class="cm-def-label">备注</span><el-input v-model="currentCard.armor.note" /></div>
-                  <div class="cm-def-row"><span class="cm-def-label">隐匿劣势</span><el-checkbox v-model="currentCard.armor.stealthDisadvantage" /></div>
+                  <div class="cm-def-row"><span class="cm-def-label">隐匿劣势</span>
+                    <el-checkbox v-model="currentCard.armor.stealthDisadvantage" />
+                    <span class="cm-formula">中/重甲通常有隐匿劣势，可手动取消</span>
+                  </div>
                 </div>
 
                 <div class="cm-def">
@@ -604,6 +607,8 @@ import {
   backendReplaceAll,
   backendUpsertCard,
   backendFetchLightCharacters,
+  backendCloneCard,
+  backendFetchCard,
   backendFetchCardBlock,
   backendPatchCardBlock,
   backendFetchSpells,
@@ -774,7 +779,29 @@ function addCard() {
   currentId.value = card.id
 }
 
-function duplicateCard(card: CharacterCard) {
+async function duplicateCard(card: CharacterCard) {
+  // v2 在线：交给服务端整卡复制（本地只加载了部分块时，本地复制会丢特性/法术）
+  if (mode.value === 'v2' && backendStatus.value.status === 'online' && !readOnlyRemote) {
+    const r = await backendCloneCard(card.id) // 返回 {id, name}
+    if (r && r.id) {
+      const newId = String(r.id)
+      const remote = await backendFetchLightCharacters()
+      const light = Array.isArray(remote) ? remote.find((x: any) => String(x.id) === newId) : null
+      const copy = light ? lightToCard(light) : null
+      if (copy) {
+        // light 只含 combat 块：其余块等服务端懒加载，别谎称“本地已有”
+        blockLoaded.set(copy.id, new Set<CardBlock>(['combat']))
+        persistBlockMap()
+        cards.value.push(copy)
+        currentId.value = copy.id
+        cardsSnap = JSON.stringify(cards.value)
+        localSave()
+        ElMessage.success('已复制角色卡（含法术）')
+        return
+      }
+    }
+  }
+  // 离线/老后端：本地复制（不含服务端法术分页里的条目）
   const copy = normalizeCharacterCard({
     ...card,
     id: uid(),
@@ -782,7 +809,11 @@ function duplicateCard(card: CharacterCard) {
     createdAt: new Date().toISOString(),
   })
   if (!copy) return
-  markCardFull(copy.id)
+  copy.spells = (copy.spells || []).map((sp) => ({ ...sp, id: uid() }))
+  // 只沿用源卡“本地确有数据”的块，避免把默认值当成真实数据推送
+  const srcBlocks = blockLoaded.get(card.id)
+  blockLoaded.set(copy.id, new Set<CardBlock>(srcBlocks && srcBlocks.size ? [...srcBlocks] : ['combat']))
+  persistBlockMap()
   cards.value.push(copy)
   currentId.value = copy.id
   ElMessage.success('已复制角色卡')
@@ -844,11 +875,12 @@ function recalcPassive() {
   c.passivePerception = 10 + getSkillTotal(c, '察觉')
 }
 
-// 护甲类型切换时填入该类护甲的基础 AC
+// 护甲类型切换时填入该类护甲的基础 AC；中/重甲按规则默认给隐匿劣势（之后可手动取消，取消后会被尊重）
 function onArmorKindChange() {
   const c = currentCard.value
   if (!c) return
   c.armor.ac = ARMOR_DEFAULT_AC[c.armor.kind]
+  c.armor.stealthDisadvantage = c.armor.kind === 'medium' || c.armor.kind === 'heavy'
 }
 
 // ========== 装备 / 武器 / 防具 / 法术 增删 ==========
@@ -1025,8 +1057,14 @@ function downloadJSON(text: string, filename: string) {
   a.click()
   URL.revokeObjectURL(url)
 }
-function exportCard(card: CharacterCard) {
-  downloadJSON(JSON.stringify(card, null, 2), `${card.name || '角色卡'}.json`)
+async function exportCard(card: CharacterCard) {
+  let data: any = card
+  // 在线时导出完整整卡（本地缓存可能只加载了部分块 + 法术在独立分页里）
+  if (mode.value === 'v2' && backendStatus.value.status === 'online' && !readOnlyRemote) {
+    const full = await backendFetchCard(card.id)
+    if (full) data = { ...full, spells: Array.isArray(full.spells) ? full.spells : [] }
+  }
+  downloadJSON(JSON.stringify(data, null, 2), `${card.name || '角色卡'}.json`)
 }
 function exportAllCards() {
   downloadJSON(JSON.stringify(cards.value, null, 2), '角色卡库.json')

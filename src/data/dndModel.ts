@@ -527,7 +527,10 @@ function coerceArmor(raw: any): ArmorDef {
     name: raw.name ?? '',
     note: raw.note ?? raw.enchantment ?? '',
     ac: Number(raw.ac) || 0,
-    stealthDisadvantage: !!raw.stealthDisadvantage || kind === 'medium' || kind === 'heavy',
+    // 中/重甲“默认”给隐匿劣势，但用户显式取消勾选后必须尊重（旧逻辑会把它一直按回 true）
+    stealthDisadvantage: typeof raw.stealthDisadvantage === 'boolean'
+      ? raw.stealthDisadvantage
+      : (kind === 'medium' || kind === 'heavy'),
     attuned: !!raw.attuned,
     description: raw.description ?? '',
     slot: raw.slot ?? '胸部',
@@ -632,11 +635,15 @@ export function normalizeCharacterCard(raw: any): CharacterCard | null {
     },
     tempHp: Number(raw.tempHp) || 0,
     hitDice: {
-      current: Number(raw.hitDice?.current) || 1,
+      current: raw.hitDice?.current === undefined || raw.hitDice?.current === null ? 1 : Number(raw.hitDice.current) || 0,
       max: Number(raw.hitDice?.max) || 1,
       formula: raw.hitDice?.formula || '1d8',
     },
-    acBonus: Number(raw.acBonus) || Number(raw.ac) || 10,
+    // AC 加值 0 是合法值（无护甲基础 10 由 armor.ac 承担），不能因为 0 被当成“没填”而回退成 10
+    acBonus:
+      raw.acBonus === undefined || raw.acBonus === null || raw.acBonus === ''
+        ? Number(raw.ac) || 10
+        : Number(raw.acBonus) || 0,
     armor: coerceArmor(raw.armor),
     shield: coerceShield(raw.shield),
     initiativeBonus: Number(raw.initiativeBonus) || 0,
