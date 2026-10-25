@@ -228,6 +228,16 @@ export async function backendPublishParties(parties: any[]): Promise<boolean> {
   }
 }
 
+/** 单团增量保存（新增/改名/加成员只写这一个团，不会删除别的团） */
+export async function backendUpsertParty(party: any): Promise<any | null> {
+  return apiJson('POST', '/parties', party)
+}
+
+/** 删除单个团 */
+export async function backendDeleteParty(id: string): Promise<any | null> {
+  return apiJson('DELETE', `/parties/${encodeURIComponent(id)}`)
+}
+
 // ========== 通用请求（战斗会话用；带 X-Dnd-User 区分 presence 成员） ==========
 export function userId(): string {
   const KEY = 'dnd-user-id'

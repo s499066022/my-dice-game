@@ -96,7 +96,7 @@ import {
   deleteParty,
   findPartyByMember,
 } from '../data/partyModel'
-import { backendPing, backendFetchParties, backendPublishParties, backendFetchLightCharacters } from '../api/characterBackend'
+import { backendPing, backendFetchParties, backendPublishParties, backendUpsertParty, backendDeleteParty, backendFetchLightCharacters } from '../api/characterBackend'
 import { onPartiesLive } from '../api/reverb'
 
 const CARDS_KEY = 'dnd-character-cards'
@@ -168,6 +168,54 @@ let publishTimer: ReturnType<typeof setTimeout> | null = null
 let pulling = false
 let suppressPublish = false // 远端覆盖/初始载入时抑制“再发布”回环
 let addBusy = false // 连点保护：新增团 400ms 内只建一个
+// 上次成功同步到后端的快照：id -> JSON。用于“只推变化的团 / 只删被删除的团”，绝不全库覆盖
+const syncedParties = new Map<string, string>()
+
+function snapshotParties(list: Party[]) {
+  const m = new Map<string, string>()
+  list.forEach((p) => m.set(p.id, JSON.stringify(p)))
+  return m
+}
+function markAllSynced() {
+  syncedParties.clear()
+  parties.value.forEach((p) => syncedParties.set(p.id, JSON.stringify(p)))
+}
+
+/** 增量同步：变化的团单条 upsert，被删除的团 DELETE；老后端（404/405）才回退整体发布 */
+async function publishChanged(): Promise<boolean> {
+  const current = snapshotParties(parties.value)
+  const upserts = parties.value.filter((p) => syncedParties.get(p.id) !== current.get(p.id))
+  const deletes = [...syncedParties.keys()].filter((id) => !current.has(id))
+  if (!upserts.length && !deletes.length) return true
+  let fallback = false
+  for (const p of upserts) {
+    const r = await backendUpsertParty(JSON.parse(JSON.stringify(p)))
+    if (r && r.ok === true) continue
+    if (r && (r.httpStatus === 404 || r.httpStatus === 405)) {
+      fallback = true
+      break
+    }
+    return false // 其它失败：保留差异，下次重试
+  }
+  if (!fallback) {
+    for (const id of deletes) {
+      const r = await backendDeleteParty(id)
+      if (r && r.ok === true) continue
+      if (r && (r.httpStatus === 404 || r.httpStatus === 405)) {
+        fallback = true
+        break
+      }
+      return false
+    }
+  }
+  if (fallback) {
+    const ok = await backendPublishParties(JSON.parse(JSON.stringify(parties.value)))
+    if (ok) markAllSynced()
+    return ok
+  }
+  markAllSynced()
+  return true
+}
 
 function persist() {
   if (suppressPublish) {
@@ -176,10 +224,10 @@ function persist() {
     return
   }
   saveParties(parties.value)
-  // 防抖自动发布到后端（团 = 会话 id，多设备共享必须上传）
+  // 防抖自动同步到后端（团 = 会话 id，多设备共享必须同步）
   if (publishTimer) clearTimeout(publishTimer)
   publishTimer = setTimeout(async () => {
-    const ok = await backendPublishParties(JSON.parse(JSON.stringify(parties.value)))
+    const ok = await publishChanged()
     if (!ok) console.warn('团同步到后端失败（离线？）——本地已保存，恢复联网后会自动重试')
   }, 500)
 }
@@ -198,6 +246,7 @@ function applyRemote(list: any[]) {
   if (sel && parties.value.some((p2) => p2.id === sel)) currentPartyId.value = sel
   else currentPartyId.value = parties.value[0]?.id ?? ''
   saveParties(parties.value)
+  markAllSynced() // 远端即权威，避免把刚拉到的数据再回推
 }
 
 
@@ -213,7 +262,7 @@ async function pullFromBackend() {
       applyRemote(remote)
       pruneDeletedMembers()
     } else if (parties.value.length) {
-      await backendPublishParties(JSON.parse(JSON.stringify(parties.value)))
+      await publishChanged()
     }
     await loadCards() // 顺带刷新有效角色集合并再次校正
   } finally {
@@ -294,7 +343,7 @@ async function syncFromBackend() {
     applyRemote(remote)
     pruneDeletedMembers()
   } else if (parties.value.length) {
-    backendPublishParties(JSON.parse(JSON.stringify(parties.value)))
+    await publishChanged()
   }
 }
 
